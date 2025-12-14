@@ -36,7 +36,7 @@ public readonly struct int256 :
     /// <summary>
     /// The value 0.
     /// </summary>
-    public static readonly int256 Zero = default;
+    public static readonly int256 Zero;
 
     /// <summary>
     /// The value 1.
@@ -583,7 +583,7 @@ public readonly struct int256 :
             int s = shift - 128;
             return new int256(
                 (value._u2 >> s) | (value._u3 << (64 - s)),
-                ((long)value._u3) >> s, // Arithmetic shift
+                (ulong)(((long)value._u3) >> s), // Arithmetic shift
                 fill, fill);
         }
         if (shift >= 64)
@@ -592,7 +592,7 @@ public readonly struct int256 :
             return new int256(
                 (value._u1 >> s) | (value._u2 << (64 - s)),
                 (value._u2 >> s) | (value._u3 << (64 - s)),
-                ((long)value._u3) >> s,
+                (ulong)(((long)value._u3) >> s),
                 fill);
         }
 
@@ -620,9 +620,9 @@ public readonly struct int256 :
     public static implicit operator int256(sbyte value) => new(value);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static implicit operator int256(ulong value) => new((long)value < 0 
-        ? throw new OverflowException("Value too large for implicit conversion") 
-        : new int256(value, 0, 0, 0));
+    public static implicit operator int256(ulong value) => value > (ulong)long.MaxValue
+    ? throw new OverflowException("Value too large for implicit conversion")
+    : new int256(value, 0, 0, 0);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static explicit operator long(int256 value)
@@ -721,11 +721,11 @@ public readonly struct int256 :
         return negative ? -result : result;
     }
 
-    public static int256 Parse(string hex) => Parse(hex.AsSpan());
+    public static int256 Parse(string hex) => Parse(hex.AsSpan(), CultureInfo.InvariantCulture);
 
-    public static int256 Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s);
+    public static int256 Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s, CultureInfo.InvariantCulture);
 
-    public static int256 Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan());
+    public static int256 Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Tries to parse a hexadecimal string without exceptions.
@@ -825,7 +825,7 @@ public readonly struct int256 :
 
         if (format == "D" || format == "d")
         {
-            return ToBigInteger().ToString();
+            return ToBigInteger().ToString(CultureInfo.InvariantCulture);
         }
 
         bool withPrefix = format == "0x" || format == "0X";
@@ -850,12 +850,12 @@ public readonly struct int256 :
         string fmt16 = uppercase ? "X16" : "x16";
 
         if (_u3 == 0 && _u2 == 0 && _u1 == 0)
-            return _u0.ToString(fmt);
+            return _u0.ToString(fmt, CultureInfo.InvariantCulture);
         if (_u3 == 0 && _u2 == 0)
-            return $"{_u1.ToString(fmt)}{_u0.ToString(fmt16)}";
+            return $"{_u1.ToString(fmt, CultureInfo.InvariantCulture)}{_u0.ToString(fmt16, CultureInfo.InvariantCulture)}";
         if (_u3 == 0)
-            return $"{_u2.ToString(fmt)}{_u1.ToString(fmt16)}{_u0.ToString(fmt16)}";
-        return $"{_u3.ToString(fmt)}{_u2.ToString(fmt16)}{_u1.ToString(fmt16)}{_u0.ToString(fmt16)}";
+            return $"{_u2.ToString(fmt, CultureInfo.InvariantCulture)}{_u1.ToString(fmt16, CultureInfo.InvariantCulture)}{_u0.ToString(fmt16, CultureInfo.InvariantCulture)}";
+        return $"{_u3.ToString(fmt, CultureInfo.InvariantCulture)}{_u2.ToString(fmt16, CultureInfo.InvariantCulture)}{_u1.ToString(fmt16, CultureInfo.InvariantCulture)}{_u0.ToString(fmt16, CultureInfo.InvariantCulture)}";
     }
 
     public bool TryFormat(Span<char> destination, out int charsWritten, ReadOnlySpan<char> format = default, IFormatProvider? provider = null)
@@ -896,7 +896,7 @@ public readonly struct int256 :
     /// <summary>
     /// Returns the decimal string representation.
     /// </summary>
-    public string ToDecimalString() => ToBigInteger().ToString();
+    public string ToDecimalString() => ToBigInteger().ToString(CultureInfo.InvariantCulture);
 
     #endregion
 
@@ -921,7 +921,7 @@ public readonly struct int256 :
     /// <summary>
     /// Converts to EVM-style minimal hex string.
     /// </summary>
-    public string ToEvmHex() => ToString("0x");
+    public string ToEvmHex() => ToString("0x", CultureInfo.InvariantCulture);
 
     #endregion
 }

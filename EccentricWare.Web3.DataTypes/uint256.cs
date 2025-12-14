@@ -31,7 +31,7 @@ public readonly struct uint256 :
     private readonly ulong _u2; // bits 128-191
     private readonly ulong _u3; // bits 192-255 (most significant)
 
-    public static readonly uint256 Zero = default;
+    public static readonly uint256 Zero;
     public static readonly uint256 One = new(1);
     public static readonly uint256 MaxValue = new(ulong.MaxValue, ulong.MaxValue, ulong.MaxValue, ulong.MaxValue);
 
@@ -844,11 +844,11 @@ public readonly struct uint256 :
         return new uint256(u0, u1, u2, u3);
     }
 
-    public static uint256 Parse(string hex) => Parse(hex.AsSpan());
+    public static uint256 Parse(string hex) => Parse(hex.AsSpan(), CultureInfo.InvariantCulture);
 
-    public static uint256 Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s);
+    public static uint256 Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s, CultureInfo.InvariantCulture);
 
-    public static uint256 Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan());
+    public static uint256 Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Tries to parse a hexadecimal string without exceptions.
@@ -967,7 +967,7 @@ public readonly struct uint256 :
         if (format == "x")
         {
             if (_u3 == 0 && _u2 == 0 && _u1 == 0)
-                return _u0.ToString("x");
+                return _u0.ToString("x", CultureInfo.InvariantCulture);
             if (_u3 == 0 && _u2 == 0)
                 return $"{_u1:x}{_u0:x16}";
             if (_u3 == 0)
@@ -978,7 +978,7 @@ public readonly struct uint256 :
         if (format == "X")
         {
             if (_u3 == 0 && _u2 == 0 && _u1 == 0)
-                return _u0.ToString("X");
+                return _u0.ToString("X", CultureInfo.InvariantCulture);
             if (_u3 == 0 && _u2 == 0)
                 return $"{_u1:X}{_u0:X16}";
             if (_u3 == 0)
@@ -988,7 +988,7 @@ public readonly struct uint256 :
 
         if (format == "D" || format == "d")
         {
-            return ToBigInteger().ToString();
+            return ToBigInteger().ToString(CultureInfo.InvariantCulture);
         }
 
         throw new FormatException($"Unknown format: {format}");
@@ -1111,7 +1111,7 @@ public readonly struct uint256 :
     /// <summary>
     /// Returns the decimal string representation.
     /// </summary>
-    public string ToDecimalString() => ToBigInteger().ToString();
+    public string ToDecimalString() => ToBigInteger().ToString(CultureInfo.InvariantCulture);
 
     #endregion
 
@@ -1201,7 +1201,7 @@ public readonly struct uint256 :
     /// <summary>
     /// Converts to EVM-style minimal hex string (no leading zeros, lowercase).
     /// </summary>
-    public string ToEvmHex() => ToString("0x");
+    public string ToEvmHex() => ToString("0x", CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Converts to a value in wei from a value in ether (multiplies by 10^18).
@@ -1232,7 +1232,7 @@ public readonly struct uint256 :
     /// </summary>
     public static class Evm
     {
-        public static readonly uint256 WeiPerEther = Parse("0xde0b6b3a7640000"); // 10^18
+        public static readonly uint256 WeiPerEther = Parse("0xde0b6b3a7640000", CultureInfo.InvariantCulture); // 10^18
         public static readonly uint256 WeiPerGwei = new(1_000_000_000UL); // 10^9
     }
 

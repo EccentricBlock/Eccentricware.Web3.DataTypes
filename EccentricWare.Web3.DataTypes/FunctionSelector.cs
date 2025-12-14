@@ -1,9 +1,10 @@
+using EccentricWare.Web3.DataTypes.JsonConverters;
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
-using EccentricWare.Web3.DataTypes.JsonConverters;
 
 namespace EccentricWare.Web3.DataTypes;
 
@@ -41,7 +42,7 @@ public readonly struct FunctionSelector :
     /// <summary>
     /// The zero selector.
     /// </summary>
-    public static readonly FunctionSelector Zero = default;
+    public static readonly FunctionSelector Zero;
 
     // Hex lookup tables
     private static ReadOnlySpan<byte> HexBytesLower => "0123456789abcdef"u8;
@@ -223,11 +224,11 @@ public readonly struct FunctionSelector :
         return new FunctionSelector(value);
     }
 
-    public static FunctionSelector Parse(string hex) => Parse(hex.AsSpan());
+    public static FunctionSelector Parse(string hex) => Parse(hex.AsSpan(), CultureInfo.InvariantCulture);
 
-    public static FunctionSelector Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s);
+    public static FunctionSelector Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s, CultureInfo.InvariantCulture);
 
-    public static FunctionSelector Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan());
+    public static FunctionSelector Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Tries to parse a hex string without exceptions.

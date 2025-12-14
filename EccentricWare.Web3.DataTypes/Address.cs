@@ -1,11 +1,12 @@
+using EccentricWare.Web3.DataTypes.JsonConverters;
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Text.Json.Serialization;
-using EccentricWare.Web3.DataTypes.JsonConverters;
 
 namespace EccentricWare.Web3.DataTypes;
 
@@ -76,7 +77,7 @@ public readonly struct Address :
     /// <summary>
     /// The zero EVM address (all bytes are 0x00).
     /// </summary>
-    public static readonly Address Zero = default;
+    public static readonly Address Zero;
 
     // Base58 alphabet (Bitcoin style, used by Solana)
     private static ReadOnlySpan<byte> Base58Alphabet => 
@@ -365,11 +366,11 @@ public readonly struct Address :
         return new Address(u0, u1, u2, u3, AddressType.Solana);
     }
 
-    public static Address Parse(string s) => Parse(s.AsSpan());
+    public static Address Parse(string s) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
 
-    public static Address Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s);
+    public static Address Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s, CultureInfo.InvariantCulture);
 
-    public static Address Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan());
+    public static Address Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Tries to parse an address string without exceptions.

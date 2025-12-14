@@ -24,7 +24,7 @@ public readonly struct HexBigInteger :
 {
     private readonly BigInteger _value;
 
-    public static readonly HexBigInteger Zero = default;
+    public static readonly HexBigInteger Zero;
     public static readonly HexBigInteger One = new(BigInteger.One);
     public static readonly HexBigInteger MinusOne = new(BigInteger.MinusOne);
 
@@ -277,11 +277,11 @@ public readonly struct HexBigInteger :
         return new HexBigInteger(negative ? -value : value);
     }
 
-    public static HexBigInteger Parse(string hex) => Parse(hex.AsSpan());
+    public static HexBigInteger Parse(string hex) => Parse(hex.AsSpan(), CultureInfo.InvariantCulture);
 
-    public static HexBigInteger Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s);
+    public static HexBigInteger Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s, CultureInfo.InvariantCulture);
 
-    public static HexBigInteger Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan());
+    public static HexBigInteger Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Tries to parse a hexadecimal string without throwing exceptions.
@@ -393,9 +393,9 @@ public readonly struct HexBigInteger :
                 return "0x0";
 
             if (_value.Sign < 0)
-                return "-0x" + (-_value).ToString("x");
+                return "-0x" + (-_value).ToString("x", CultureInfo.InvariantCulture);
 
-            return "0x" + _value.ToString("x");
+            return "0x" + _value.ToString("x", CultureInfo.InvariantCulture);
         }
 
         if (format == "x")
@@ -404,9 +404,9 @@ public readonly struct HexBigInteger :
                 return "0";
 
             if (_value.Sign < 0)
-                return "-" + (-_value).ToString("x");
+                return "-" + (-_value).ToString("x", CultureInfo.InvariantCulture);
 
-            return _value.ToString("x");
+            return _value.ToString("x", CultureInfo.InvariantCulture);
         }
 
         if (format == "X")
@@ -415,14 +415,14 @@ public readonly struct HexBigInteger :
                 return "0";
 
             if (_value.Sign < 0)
-                return "-" + (-_value).ToString("X");
+                return "-" + (-_value).ToString("X", CultureInfo.InvariantCulture);
 
-            return _value.ToString("X");
+            return _value.ToString("X", CultureInfo.InvariantCulture);
         }
 
         if (format == "D" || format == "d")
         {
-            return _value.ToString();
+            return _value.ToString(CultureInfo.InvariantCulture);
         }
 
         throw new FormatException($"Unknown format: {format}");
@@ -544,7 +544,7 @@ public readonly struct HexBigInteger :
             return minDigits <= 1 ? "0" : new string('0', minDigits);
 
         var abs = _value.Sign < 0 ? -_value : _value;
-        string hex = abs.ToString("x");
+        string hex = abs.ToString("x", CultureInfo.InvariantCulture);
         
         int padding = Math.Max(0, minDigits - hex.Length);
         bool negative = _value.Sign < 0;
@@ -572,7 +572,7 @@ public readonly struct HexBigInteger :
     /// <summary>
     /// Returns the decimal string representation.
     /// </summary>
-    public string ToDecimalString() => _value.ToString();
+    public string ToDecimalString() => _value.ToString(CultureInfo.InvariantCulture);
 
     #endregion
 
@@ -751,7 +751,7 @@ public readonly struct HexBigInteger :
     /// <summary>
     /// Converts to EVM-style minimal hex string (no leading zeros, lowercase).
     /// </summary>
-    public string ToEvmHex() => ToString("0x");
+    public string ToEvmHex() => ToString("0x", CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Converts a wei value to ether.

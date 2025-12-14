@@ -1,0 +1,120 @@
+﻿name: BuildAndPack
+
+on:
+  release:
+    types: [published] 
+
+jobs:
+  build-and-publish:
+    permissions:
+      contents: read
+      id-token: write  # required for NuGet.org Trusted Publishing (OIDC)
+
+    runs-on: windows-latest
+
+    # Prevent multiple concurrent publishes for the same release/tag
+    concurrency:
+      group: nuget-publish-${{ github.event.release.tag_name }}
+      cancel-in-progress: false
+
+    env:
+      CONFIGURATION: Release
+      DOTNET_VERSION: 10.0.x
+      PROJECT_PATH: ./EccentricWare.Web3.DataTypes/EccentricWare.Web3.DataTypes.csproj
+      PACKAGE_OUTPUT: artifacts/package/release
+      NUGET_SOURCE: https://api.nuget.org/v3/index.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Determine package version from release tag
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name }}"
+          if ([string]::IsNullOrWhiteSpace($tag)) { throw "Missing release tag_name." }
+
+          # Accept tags like "v1.2.3" or "1.2.3"
+          $version = $tag
+          if ($version.StartsWith("v")) { $version = $version.Substring(1) }
+
+          # Very lightweight SemVer-ish validation (NuGet accepts SemVer 2.0.0)
+          if ($version -notmatch '^\d+\.\d+\.\d+([\-+].+)?$') {
+            throw "Tag '$tag' does not look like a NuGet version. Use e.g. v1.2.3 or 1.2.3."
+          }
+
+          "PACKAGE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Using PACKAGE_VERSION=$version"
+
+      - name: Restore
+        run: dotnet restore ${{ env.PROJECT_PATH }}
+
+      - name: Build
+        run: dotnet build ${{ env.PROJECT_PATH }} -c ${{ env.CONFIGURATION }} --no-restore
+
+      - name: Test (optional)
+        run: dotnet test -c ${{ env.CONFIGURATION }} --no-build
+        # If you don't have tests or don't want them gating publishing, remove this step.
+
+      - name: Pack
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "${{ env.PACKAGE_OUTPUT }}" | Out-Null
+
+          dotnet pack "${{ env.PROJECT_PATH }}" `
+            -c "${{ env.CONFIGURATION }}" `
+            -o "${{ env.PACKAGE_OUTPUT }}" `
+            --no-build `
+            /p:ContinuousIntegrationBuild=true `
+            /p:PackageVersion="${{ env.PACKAGE_VERSION }}" `
+            /p:RepositoryUrl="${{ github.server_url }}/${{ github.repository }}" `
+            /p:RepositoryCommit="${{ github.sha }}"
+
+          # If you deliberately create RID-specific packages, uncomment and ensure your project supports it.
+          # dotnet pack "${{ env.PROJECT_PATH }}" -c "${{ env.CONFIGURATION }}" -o "${{ env.PACKAGE_OUTPUT }}" --no-build -r win-x64 `
+          #   /p:ContinuousIntegrationBuild=true /p:PackageVersion="${{ env.PACKAGE_VERSION }}"
+
+      # Use GitHub OIDC to retrieve a short-lived NuGet API key via Trusted Publishing
+      - name: NuGet login (OIDC → temp API key)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          # Secret contains your NuGet.org username (NOT an API key)
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Push to NuGet.org
+        shell: pwsh
+        run: |
+          $apiKey = "${{ steps.login.outputs.NUGET_API_KEY }}"
+          if ([string]::IsNullOrWhiteSpace($apiKey)) { throw "NuGet API key was not returned by NuGet/login." }
+
+          $pkgs = Get-ChildItem "${{ env.PACKAGE_OUTPUT }}" -Filter *.nupkg -File |
+                  Where-Object { $_.Name -notlike "*.symbols.nupkg" }
+
+          if (-not $pkgs) { throw "No .nupkg files found in ${{ env.PACKAGE_OUTPUT }}" }
+
+          foreach ($pkg in $pkgs) {
+            dotnet nuget push $pkg.FullName `
+              --api-key $apiKey `
+              --source "${{ env.NUGET_SOURCE }}" `
+              --skip-duplicate
+          }
+
+          # Push symbol packages if present (snupkg)
+          $snupkgs = Get-ChildItem "${{ env.PACKAGE_OUTPUT }}" -Filter *.snupkg -File -ErrorAction SilentlyContinue
+          foreach ($s in $snupkgs) {
+            dotnet nuget push $s.FullName `
+              --api-key $apiKey `
+              --source "${{ env.NUGET_SOURCE }}" `
+              --skip-duplicate
+          }
+
+      - name: Upload packed artifacts (optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-packages
+          path: ${{ env.PACKAGE_OUTPUT }}
+          if-no-files-found: error
