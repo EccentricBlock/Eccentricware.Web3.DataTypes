@@ -1,4 +1,5 @@
 using EccentricWare.Web3.DataTypes.JsonConverters;
+using EccentricWare.Web3.DataTypes.Utils;
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;

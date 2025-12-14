@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -19,7 +20,7 @@ public sealed class Hash32JsonConverter : JsonConverter<Hash32>
         {
             // Fallback for multi-segment sequences
             var str = reader.GetString();
-            return str is null ? Hash32.Zero : Hash32.Parse(str);
+            return str is null ? Hash32.Zero : Hash32.Parse(str, CultureInfo.InvariantCulture);
         }
 
         ReadOnlySpan<byte> utf8 = reader.ValueSpan;
@@ -46,7 +47,7 @@ public sealed class Hash32JsonConverter : JsonConverter<Hash32>
     {
         // Write directly to UTF-8 buffer without string allocation
         Span<byte> buffer = stackalloc byte[66]; // "0x" + 64 hex chars
-        if (value.TryFormat(buffer, out int bytesWritten))
+        if (value.TryFormat(buffer, out int bytesWritten, default, CultureInfo.InvariantCulture))
         {
             writer.WriteStringValue(buffer.Slice(0, bytesWritten));
         }

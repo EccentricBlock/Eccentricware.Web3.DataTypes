@@ -1,10 +1,12 @@
+using EccentricWare.Web3.DataTypes.JsonConverters;
+using EccentricWare.Web3.DataTypes.Utils;
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Text.Json.Serialization;
-using EccentricWare.Web3.DataTypes.JsonConverters;
 
 namespace EccentricWare.Web3.DataTypes;
 
@@ -78,7 +80,7 @@ public readonly struct Signature :
     /// <summary>
     /// The zero signature.
     /// </summary>
-    public static readonly Signature Zero = default;
+    public static readonly Signature Zero;
 
     // Hex lookup tables
     private static ReadOnlySpan<byte> HexBytesLower => "0123456789abcdef"u8;
@@ -451,11 +453,11 @@ public readonly struct Signature :
         return -1;
     }
 
-    public static Signature Parse(string hex) => Parse(hex.AsSpan());
+    public static Signature Parse(string hex) => Parse(hex.AsSpan(), CultureInfo.InvariantCulture);
 
-    public static Signature Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s);
+    public static Signature Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s, CultureInfo.InvariantCulture);
 
-    public static Signature Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan());
+    public static Signature Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Tries to parse a signature hex string without exceptions.

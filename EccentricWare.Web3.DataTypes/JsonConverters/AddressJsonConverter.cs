@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -18,13 +19,13 @@ public sealed class AddressJsonConverter : JsonConverter<Address>
         if (str is null)
             return Address.Zero;
 
-        return Address.Parse(str);
+        return Address.Parse(str, CultureInfo.InvariantCulture);
     }
 
     public override void Write(Utf8JsonWriter writer, Address value, JsonSerializerOptions options)
     {
         Span<byte> buffer = stackalloc byte[Address.MaxBase58Length + 2];
-        if (value.TryFormat(buffer, out int bytesWritten))
+        if (value.TryFormat(buffer, out int bytesWritten, default, CultureInfo.InvariantCulture))
         {
             writer.WriteStringValue(buffer.Slice(0, bytesWritten));
         }

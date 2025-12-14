@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -18,7 +19,7 @@ public sealed class SignatureJsonConverter : JsonConverter<Signature>
         if (str is null)
             return Signature.Zero;
 
-        return Signature.Parse(str);
+        return Signature.Parse(str, CultureInfo.InvariantCulture);
     }
 
     public override void Write(Utf8JsonWriter writer, Signature value, JsonSerializerOptions options)
@@ -26,7 +27,7 @@ public sealed class SignatureJsonConverter : JsonConverter<Signature>
         // Write directly to UTF-8 buffer without string allocation
         // Max size: "0x" + 130 hex chars (EVM)
         Span<byte> buffer = stackalloc byte[Signature.EvmHexLength + 2];
-        if (value.TryFormat(buffer, out int bytesWritten))
+        if (value.TryFormat(buffer, out int bytesWritten, default, CultureInfo.InvariantCulture))
         {
             writer.WriteStringValue(buffer.Slice(0, bytesWritten));
         }

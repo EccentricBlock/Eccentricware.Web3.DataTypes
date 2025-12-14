@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -19,12 +20,12 @@ public sealed class HexBigIntegerJsonConverter : JsonConverter<HexBigInteger>
             // Try hex first, then decimal
             if (str.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ||
                 str.StartsWith("-0x", StringComparison.OrdinalIgnoreCase))
-                return HexBigInteger.Parse(str);
+                return HexBigInteger.Parse(str, CultureInfo.InvariantCulture);
 
             if (HexBigInteger.TryParseDecimal(str, out var result))
                 return result;
 
-            return HexBigInteger.Parse(str);
+            return HexBigInteger.Parse(str, CultureInfo.InvariantCulture);
         }
 
         if (reader.TokenType == JsonTokenType.Number)

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -40,7 +41,7 @@ public sealed class HexBytesJsonConverter : JsonConverter<HexBytes>
         if (requiredLength <= 512)
         {
             Span<byte> buffer = stackalloc byte[requiredLength];
-            if (value.TryFormat(buffer, out int bytesWritten))
+            if (value.TryFormat(buffer, out int bytesWritten, default, CultureInfo.InvariantCulture))
             {
                 writer.WriteStringValue(buffer.Slice(0, bytesWritten));
                 return;

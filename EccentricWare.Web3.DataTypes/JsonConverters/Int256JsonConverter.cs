@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -20,12 +21,12 @@ public sealed class Int256JsonConverter : JsonConverter<int256>
             // Try hex first, then decimal
             if (str.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ||
                 str.StartsWith("-0x", StringComparison.OrdinalIgnoreCase))
-                return int256.Parse(str);
+                return int256.Parse(str, CultureInfo.InvariantCulture);
 
             if (int256.TryParseDecimal(str, out var result))
                 return result;
 
-            return int256.Parse(str);
+            return int256.Parse(str, CultureInfo.InvariantCulture);
         }
 
         if (reader.TokenType == JsonTokenType.Number)
@@ -41,7 +42,7 @@ public sealed class Int256JsonConverter : JsonConverter<int256>
     {
         // Write directly to UTF-8 without string allocation
         Span<byte> buffer = stackalloc byte[69]; // "-0x" + 64 hex chars
-        if (value.TryFormat(buffer, out int bytesWritten))
+        if (value.TryFormat(buffer, out int bytesWritten, default, CultureInfo.InvariantCulture))
         {
             writer.WriteStringValue(buffer.Slice(0, bytesWritten));
         }

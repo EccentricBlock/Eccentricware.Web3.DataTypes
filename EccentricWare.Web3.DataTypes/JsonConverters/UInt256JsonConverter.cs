@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -18,12 +19,12 @@ public sealed class UInt256JsonConverter : JsonConverter<uint256>
 
             // Try hex first, then decimal
             if (str.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-                return uint256.Parse(str);
+                return uint256.Parse(str, CultureInfo.InvariantCulture);
 
             if (uint256.TryParseDecimal(str, out var result))
                 return result;
 
-            return uint256.Parse(str);
+            return uint256.Parse(str, CultureInfo.InvariantCulture);
         }
 
         if (reader.TokenType == JsonTokenType.Number)

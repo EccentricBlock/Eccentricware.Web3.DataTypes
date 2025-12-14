@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -18,7 +19,7 @@ public sealed class FunctionSelectorJsonConverter : JsonConverter<FunctionSelect
         if (reader.HasValueSequence)
         {
             var str = reader.GetString();
-            return str is null ? FunctionSelector.Zero : FunctionSelector.Parse(str);
+            return str is null ? FunctionSelector.Zero : FunctionSelector.Parse(str, CultureInfo.InvariantCulture);
         }
 
         ReadOnlySpan<byte> utf8 = reader.ValueSpan;
@@ -45,7 +46,7 @@ public sealed class FunctionSelectorJsonConverter : JsonConverter<FunctionSelect
     {
         // Write directly to UTF-8 buffer without string allocation
         Span<byte> buffer = stackalloc byte[FunctionSelector.HexLength + 2]; // "0x" + 8 hex chars
-        if (value.TryFormat(buffer, out int bytesWritten))
+        if (value.TryFormat(buffer, out int bytesWritten, default, CultureInfo.InvariantCulture))
         {
             writer.WriteStringValue(buffer.Slice(0, bytesWritten));
         }

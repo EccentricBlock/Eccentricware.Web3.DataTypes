@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 using EccentricWare.Web3.DataTypes.JsonConverters;
+using EccentricWare.Web3.DataTypes.Utils;
 
 namespace EccentricWare.Web3.DataTypes;
 
@@ -30,7 +31,7 @@ public readonly struct HexBytes :
     /// <summary>
     /// Empty byte array.
     /// </summary>
-    public static readonly HexBytes Empty = default;
+    public static readonly HexBytes Empty;
 
     // Hex lookup tables
     private static ReadOnlySpan<byte> HexBytesLower => "0123456789abcdef"u8;
@@ -149,7 +150,7 @@ public readonly struct HexBytes :
         get
         {
             if (_bytes == null || (uint)index >= (uint)_bytes.Length)
-                throw new IndexOutOfRangeException();
+                throw new ArgumentOutOfRangeException(nameof(index));
             return _bytes[index];
         }
     }
