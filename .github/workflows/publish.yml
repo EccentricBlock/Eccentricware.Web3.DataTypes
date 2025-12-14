@@ -6,6 +6,7 @@ on:
 
 jobs:
   build-and-publish:
+    environment: production
     permissions:
       contents: read
       id-token: write  # required for NuGet.org Trusted Publishing (OIDC)
