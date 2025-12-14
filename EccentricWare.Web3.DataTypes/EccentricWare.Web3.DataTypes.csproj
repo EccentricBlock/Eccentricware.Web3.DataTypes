@@ -7,7 +7,7 @@
     <PackageProjectUrl></PackageProjectUrl>
     <Title>Web3</Title>
     <PackageId>EccentricWare.Web3.DataTypes</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Authors>EccentricBlock</Authors>
     <Company>EccentricWare</Company>
     <Description>Zero/Minimal allocation Web3 DataTypes for use within Web3/blockchain projects.</Description>
@@ -15,7 +15,7 @@
     <RepositoryType>git</RepositoryType>
     <PackageTags>Web3,Solana,EVM,Ethereum,Blockchain</PackageTags>
     <NeutralLanguage>en</NeutralLanguage>
-    <AssemblyVersion>1.0.0</AssemblyVersion>
+    <AssemblyVersion>1.0.1</AssemblyVersion>
     <IncludeSymbols>True</IncludeSymbols>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
   </PropertyGroup>
