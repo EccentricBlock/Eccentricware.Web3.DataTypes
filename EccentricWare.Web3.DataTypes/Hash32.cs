@@ -47,6 +47,9 @@ public readonly struct Hash32 :
     /// </summary>
     public static readonly Hash32 Zero;
 
+    // Bitcoin / Solana Base58 alphabet
+    private static ReadOnlySpan<byte> Base58Alphabet => "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"u8;
+
     #region Constructors
 
     /// <summary>
@@ -247,7 +250,46 @@ public readonly struct Hash32 :
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static HexBigInteger Parse(ReadOnlySpan<byte> hexUtf8) => ParseHexUtf8(hexUtf8);
+
+    public static Hash32 Parse(ReadOnlySpan<byte> hexUtf8)
+    {
+        if (TryParse(hexUtf8, out var result))
+        {
+            return result;
+        }
+
+        throw new FormatException("Invalid hexadecimal string");
+    }
+
+    /// <summary>
+    /// Parses a Base58-encoded UTF-8 span into a <see cref="Hash32"/>.
+    /// Canonical Solana encoding for signatures and hashes.
+    /// Zero-allocation; rejects non-32-byte decoded payloads.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Hash32 ParseBase58(ReadOnlySpan<byte> utf8)
+    {
+        if (TryParseBase58(utf8, out var value))
+            return value;
+
+        ThrowHelper.ThrowFormatExceptionInvalidBase58();
+        return default; // unreachable
+    }
+
+    /// <summary>
+    /// Parses a Base64-encoded UTF-8 span into a <see cref="Hash32"/>.
+    /// Supports standard and URL-safe Base64.
+    /// Zero-allocation; rejects non-32-byte decoded payloads.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Hash32 ParseBase64(ReadOnlySpan<byte> utf8)
+    {
+        if (TryParseBase64(utf8, out var value))
+            return value;
+
+        ThrowHelper.ThrowFormatExceptionInvalidBase64();
+        return default; // unreachable
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Hash32 Parse(string hex) => Parse(hex.AsSpan(), CultureInfo.InvariantCulture);
@@ -265,6 +307,111 @@ public readonly struct Hash32 :
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Hash32 Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Tries to parse a JSON-RPC UTF-8 value into a <see cref="Hash32"/> without allocations.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParse(ReadOnlySpan<byte> utf8, out Hash32 result)
+    {
+        result = Zero;
+
+        if (utf8.IsEmpty)
+            return false;
+
+        // Fast-path: raw 32-byte hash (e.g. Solana internal / binary transports)
+        if (utf8.Length == ByteLength)
+        {
+            result = new Hash32(utf8);
+            return true;
+        }
+
+        // Optional 0x / 0X prefix (EVM JSON-RPC)
+        if (utf8.Length >= 2 && utf8[0] == (byte)'0' && (utf8[1] | 0x20) == (byte)'x')
+            utf8 = utf8.Slice(2);
+
+        if (utf8.Length != HexLength)
+            return false;
+
+        // Parse 64 hex nibbles -> 4 x ulong (big-endian)
+        if (!ByteUtils.TryParseHexUInt64Utf8(utf8.Slice(0, 16), out ulong u0)) return false;
+        if (!ByteUtils.TryParseHexUInt64Utf8(utf8.Slice(16, 16), out ulong u1)) return false;
+        if (!ByteUtils.TryParseHexUInt64Utf8(utf8.Slice(32, 16), out ulong u2)) return false;
+        if (!ByteUtils.TryParseHexUInt64Utf8(utf8.Slice(48, 16), out ulong u3)) return false;
+
+        result = new Hash32(u0, u1, u2, u3);
+        return true;
+    }
+
+    /// <summary>
+    /// Tries to parse a Base58-encoded UTF-8 span into a <see cref="Hash32"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParseBase58(ReadOnlySpan<byte> utf8, out Hash32 result)
+    {
+        result = Zero;
+
+        // Max Base58 length for 32 bytes is 44
+        Span<byte> buffer = stackalloc byte[ByteLength + 1]; // +1 for carry safety
+        buffer.Clear();
+
+        int length = 0;
+
+        for (int i = 0; i < utf8.Length; i++)
+        {
+            int carry = Base58Alphabet.IndexOf(utf8[i]);
+            if (carry < 0)
+                return false;
+
+            int j = 0;
+            for (int k = ByteLength; k >= 0; k--)
+            {
+                int value = buffer[k] * 58 + carry;
+                buffer[k] = (byte)value;
+                carry = value >> 8;
+                if (buffer[k] != 0 && j == 0)
+                    j = k;
+            }
+
+            if (carry != 0)
+                return false;
+
+            length = ByteLength + 1 - j;
+        }
+
+        // Strip leading zero used for carry
+        ReadOnlySpan<byte> decoded =
+            length == ByteLength + 1 ? buffer.Slice(1) : buffer.Slice(ByteLength + 1 - length);
+
+        if (decoded.Length != ByteLength)
+            return false;
+
+        result = new Hash32(decoded);
+        return true;
+    }
+
+    /// <summary>
+    /// Tries to parse a Base64-encoded UTF-8 span into a <see cref="Hash32"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParseBase64(ReadOnlySpan<byte> utf8, out Hash32 result)
+    {
+        result = Zero;
+
+        Span<byte> decoded = stackalloc byte[ByteLength];
+
+        if (!System.Convert.TryFromBase64Chars(
+                MemoryMarshal.Cast<byte, char>(utf8),
+                decoded,
+                out int bytesWritten))
+            return false;
+
+        if (bytesWritten != ByteLength)
+            return false;
+
+        result = new Hash32(decoded);
+        return true;
+    }
 
     /// <summary>
     /// Tries to parse a hexadecimal string without exceptions.

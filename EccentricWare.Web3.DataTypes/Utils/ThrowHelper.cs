@@ -11,6 +11,10 @@ namespace EccentricWare.Web3.DataTypes.Utils;
 internal static class ThrowHelper
 {
     [DoesNotReturn]
+    public static void ThrowFormatExceptionInvalidBase64()
+     => throw new FormatException("Invalid Base64 encoded value.");
+
+    [DoesNotReturn]
     public static void ThrowFormatExceptionInvalidAddress()
         => throw new FormatException("Invalid blockchain address format");
 

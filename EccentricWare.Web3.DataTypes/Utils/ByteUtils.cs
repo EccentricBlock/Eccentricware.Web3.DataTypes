@@ -103,4 +103,22 @@ public static class ByteUtils
         }
         return true;
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParseHexUInt64Utf8(ReadOnlySpan<byte> hex, out ulong value)
+    {
+        value = 0;
+
+        // Unrolled fixed-width loop (exactly 16 nibbles)
+        for (int i = 0; i < 16; i++)
+        {
+            int nibble = ByteUtils.ParseHexNibbleUtf8(hex[i]);
+            if (nibble < 0)
+                return false;
+
+            value = (value << 4) | (uint)nibble;
+        }
+
+        return true;
+    }
 }
