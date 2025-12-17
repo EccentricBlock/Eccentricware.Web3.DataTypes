@@ -38,12 +38,11 @@ jobs:
           $tag = "${{ github.event.release.tag_name }}"
           if ([string]::IsNullOrWhiteSpace($tag)) { throw "Missing release tag_name." }
 
-          # Accept tags like "v1.2.3" or "1.2.3"
+          # Accept tags like "v1.2.3", "1.2.3", "v1.2", or "1.2"
           $version = $tag
           if ($version.StartsWith("v")) { $version = $version.Substring(1) }
 
-          # Very lightweight SemVer-ish validation (NuGet accepts SemVer 2.0.0)
-          if ($version -notmatch '^\d+\.\d+\.\d+([\-+].+)?$') {
+          if ($version -notmatch '^\d+\.\d+(\.\d+)?([\-+].+)?$') {
             throw "Tag '$tag' does not look like a NuGet version. Use e.g. v1.2.3 or 1.2.3."
           }
 
