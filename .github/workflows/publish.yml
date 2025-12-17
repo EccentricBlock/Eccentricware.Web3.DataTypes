@@ -68,9 +68,7 @@ jobs:
             -c "${{ env.CONFIGURATION }}" `
             -o "${{ env.PACKAGE_OUTPUT }}" `
             --no-build `
-            /p:ContinuousIntegrationBuild=true `
             /p:PackageVersion="${{ env.PACKAGE_VERSION }}" `
-            /p:RepositoryUrl="${{ github.server_url }}/${{ github.repository }}" `
             /p:RepositoryCommit="${{ github.sha }}"
 
           # If you deliberately create RID-specific packages, uncomment and ensure your project supports it.

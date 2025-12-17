@@ -19,9 +19,7 @@
     <IncludeSymbols>True</IncludeSymbols>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>* Added: ReadOnlySpan&lt;byte&gt; Parsing For All DataTypes.
-* Fixed: Recursive Parsing Issue
-</PackageReleaseNotes>
+	<ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
