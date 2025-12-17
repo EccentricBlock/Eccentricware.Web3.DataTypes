@@ -1,7 +1,5 @@
 using System.Buffers;
-using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 using EccentricWare.Web3.DataTypes.JsonConverters;
 using EccentricWare.Web3.DataTypes.Utils;
@@ -297,6 +295,7 @@ public readonly struct HexBytes :
     /// <summary>
     /// Parses a hex string (with or without 0x prefix).
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static HexBytes Parse(ReadOnlySpan<char> hex)
     {
         if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
@@ -313,8 +312,8 @@ public readonly struct HexBytes :
 
         for (int i = 0; i < byteCount; i++)
         {
-            int hi = ParseHexNibble(hex[i * 2]);
-            int lo = ParseHexNibble(hex[i * 2 + 1]);
+            int hi = ByteUtils.ParseHexNibble(hex[i * 2]);
+            int lo = ByteUtils.ParseHexNibble(hex[i * 2 + 1]);
             if (hi < 0 || lo < 0)
                 ThrowHelper.ThrowFormatExceptionInvalidHex();
             bytes[i] = (byte)((hi << 4) | lo);
@@ -323,11 +322,19 @@ public readonly struct HexBytes :
         return FromArrayUnsafe(bytes);
     }
 
+    public static HexBytes Parse(ReadOnlySpan<byte> utf8)
+    {
+        if (!TryParse(utf8, out var value))
+            ThrowHelper.ThrowFormatExceptionInvalidHex();
+        return value;
+    }
+
     public static HexBytes Parse(string hex) => Parse(hex.AsSpan());
 
     /// <summary>
     /// Tries to parse a hex string without exceptions.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool TryParse(ReadOnlySpan<char> hex, out HexBytes result)
     {
         result = Empty;
@@ -346,14 +353,73 @@ public readonly struct HexBytes :
 
         for (int i = 0; i < byteCount; i++)
         {
-            int hi = ParseHexNibble(hex[i * 2]);
-            int lo = ParseHexNibble(hex[i * 2 + 1]);
+            int hi = ByteUtils.ParseHexNibble(hex[i * 2]);
+            int lo = ByteUtils.ParseHexNibble(hex[i * 2 + 1]);
             if (hi < 0 || lo < 0)
                 return false;
             bytes[i] = (byte)((hi << 4) | lo);
         }
 
         result = FromArrayUnsafe(bytes);
+        return true;
+    }
+
+
+    /// <summary>
+    /// Tries to parse a UTF-8 encoded JSON-RPC hex value into HexBytes.
+    /// Allocation is limited to the final byte array only.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParse(ReadOnlySpan<byte> utf8, out HexBytes value)
+    {
+        value = Empty;
+
+        if (utf8.Length == 0)
+            return true;
+
+        // Trim surrounding quotes if present
+        if (utf8.Length >= 2 && utf8[0] == (byte)'"' && utf8[^1] == (byte)'"')
+            utf8 = utf8.Slice(1, utf8.Length - 2);
+
+        if (utf8.Length == 0)
+            return true;
+
+        // Optional 0x prefix
+        if (utf8.Length >= 2 && utf8[0] == (byte)'0' && (utf8[1] | 0x20) == (byte)'x')
+            utf8 = utf8.Slice(2);
+
+        if (utf8.Length == 0)
+            return true;
+
+        int hexLen = utf8.Length;
+        int byteLen = (hexLen + 1) >> 1;
+
+        var bytes = new byte[byteLen];
+
+        int src = 0;
+        int dst = 0;
+
+        // Handle odd-length hex (single leading nibble)
+        if ((hexLen & 1) != 0)
+        {
+            int lo = ByteUtils.ParseHexNibbleUtf8(utf8[src++]);
+            if (lo < 0)
+                return false;
+            bytes[dst++] = (byte)lo;
+        }
+
+        // Parse remaining full bytes
+        for (; src < hexLen; src += 2, dst++)
+        {
+            int hi = ByteUtils.ParseHexNibbleUtf8(utf8[src]);
+            int lo = ByteUtils.ParseHexNibbleUtf8(utf8[src + 1]);
+            if ((hi | lo) < 0)
+                return false;
+
+            bytes[dst] = (byte)((hi << 4) | lo);
+        }
+
+        value = FromArrayUnsafe(bytes);
         return true;
     }
 
@@ -365,18 +431,6 @@ public readonly struct HexBytes :
             return true;
         }
         return TryParse(hex.AsSpan(), out result);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int ParseHexNibble(char c)
-    {
-        int val = c;
-        int digit = val - '0';
-        int lower = (val | 0x20) - 'a' + 10;
-        
-        if ((uint)digit <= 9) return digit;
-        if ((uint)(lower - 10) <= 5) return lower;
-        return -1;
     }
 
     #endregion

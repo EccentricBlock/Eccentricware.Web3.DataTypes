@@ -225,15 +225,56 @@ public readonly struct FunctionSelector :
         return new FunctionSelector(value);
     }
 
+    public static FunctionSelector Parse(ReadOnlySpan<byte> utf8)
+    {
+        if (!TryParse(utf8, out var result))
+            ThrowHelper.ThrowFormatExceptionInvalidAddress();
+        return result;
+    }
+
     public static FunctionSelector Parse(string hex) => Parse(hex.AsSpan(), CultureInfo.InvariantCulture);
 
-    public static FunctionSelector Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s, CultureInfo.InvariantCulture);
+    public static FunctionSelector Parse(ReadOnlySpan<char> s, IFormatProvider? provider)
+    {
+        if (TryParse(s, provider, out var result))
+        {
+            return result;
+        }
 
-    public static FunctionSelector Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
+        throw new FormatException("Invalid hexadecimal string");
+    }
+
+    public static FunctionSelector Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), provider);
 
     /// <summary>
     /// Tries to parse a hex string without exceptions.
     /// </summary>
+    /// 
+
+    /// <summary>
+    /// Tries to parse a function selector from UTF-8 JSON-RPC data without throwing.
+    /// </summary>
+    public static bool TryParse(ReadOnlySpan<byte> utf8Hex, out FunctionSelector result)
+    {
+        result = Zero;
+
+        if (utf8Hex.Length == 0)
+            return false;
+
+        // Optional 0x / 0X prefix
+        if (utf8Hex.Length >= 2 && utf8Hex[0] == (byte)'0' && (utf8Hex[1] | 0x20) == (byte)'x')
+            utf8Hex = utf8Hex.Slice(2);
+
+        if (utf8Hex.Length != HexLength)
+            return false;
+
+        if (!ByteUtils.TryParseHexUInt32Utf8(utf8Hex, out uint value))
+            return false;
+
+        result = new FunctionSelector(value);
+        return true;
+    }
+
     public static bool TryParse(ReadOnlySpan<char> hex, out FunctionSelector result)
     {
         result = Zero;

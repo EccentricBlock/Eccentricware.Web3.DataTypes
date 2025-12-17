@@ -1,3 +1,5 @@
+using EccentricWare.Web3.DataTypes.JsonConverters;
+using EccentricWare.Web3.DataTypes.Utils;
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
@@ -6,7 +8,6 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Text.Json.Serialization;
-using EccentricWare.Web3.DataTypes.JsonConverters;
 
 namespace EccentricWare.Web3.DataTypes;
 
@@ -695,6 +696,14 @@ public readonly struct int256 :
     /// Parses a hexadecimal string (with or without 0x prefix).
     /// Supports negative values with leading '-'.
     /// </summary>
+
+    public static int256 Parse(ReadOnlySpan<byte> utf8)
+    {
+        if (!TryParse(utf8, out var value))
+            throw new FormatException("Invalid int256 JSON-RPC value");
+        return value;
+    }
+
     public static int256 Parse(ReadOnlySpan<char> hex)
     {
         bool negative = false;
@@ -723,13 +732,129 @@ public readonly struct int256 :
 
     public static int256 Parse(string hex) => Parse(hex.AsSpan(), CultureInfo.InvariantCulture);
 
-    public static int256 Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s, CultureInfo.InvariantCulture);
+    public static int256 Parse(ReadOnlySpan<char> s, IFormatProvider? provider)
+    {
+        if (TryParse(s, provider, out var result))
+        {
+            return result;
+        }
 
-    public static int256 Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
+        throw new FormatException("Invalid hexadecimal string");
+    }
+    public static int256 Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), provider);
 
     /// <summary>
     /// Tries to parse a hexadecimal string without exceptions.
     /// </summary>
+
+    public static bool TryParse(ReadOnlySpan<byte> utf8, out int256 value)
+    {
+        value = Zero;
+
+        if (utf8.Length == 0)
+            return true;
+
+        // Trim surrounding quotes if present
+        if (utf8.Length >= 2 && utf8[0] == (byte)'"' && utf8[^1] == (byte)'"')
+            utf8 = utf8.Slice(1, utf8.Length - 2);
+
+        if (utf8.Length == 0)
+            return true;
+
+        // Detect sign
+        bool negative = false;
+        if (utf8[0] == (byte)'-')
+        {
+            negative = true;
+            utf8 = utf8.Slice(1);
+            if (utf8.Length == 0)
+                return false;
+        }
+
+        // ---------- EVM hex path ----------
+        if (utf8.Length >= 2 && utf8[0] == (byte)'0' && (utf8[1] | 0x20) == (byte)'x')
+        {
+            utf8 = utf8.Slice(2);
+            if (utf8.Length == 0)
+            {
+                value = Zero;
+                return true;
+            }
+
+            if (utf8.Length > 64)
+                return false;
+
+            ulong u0 = 0, u1 = 0, u2 = 0, u3 = 0;
+
+            int limb = 0;
+            ulong acc = 0;
+            int shift = 0;
+
+            // Parse from least-significant nibble
+            for (int i = utf8.Length - 1; i >= 0; i--)
+            {
+                int n = ByteUtils.ParseHexNibbleUtf8(utf8[i]);
+                if (n < 0)
+                    return false;
+
+                acc |= (ulong)n << shift;
+                shift += 4;
+
+                if (shift == 64)
+                {
+                    switch (limb)
+                    {
+                        case 0: u0 = acc; break;
+                        case 1: u1 = acc; break;
+                        case 2: u2 = acc; break;
+                        case 3: u3 = acc; break;
+                        default: return false;
+                    }
+                    limb++;
+                    acc = 0;
+                    shift = 0;
+                }
+            }
+
+            if (shift != 0)
+            {
+                switch (limb)
+                {
+                    case 0: u0 = acc; break;
+                    case 1: u1 = acc; break;
+                    case 2: u2 = acc; break;
+                    case 3: u3 = acc; break;
+                    default: return false;
+                }
+            }
+
+            var result = new int256(u0, u1, u2, u3);
+            value = negative ? -result : result;
+            return true;
+        }
+
+        // ---------- Decimal path (Solana + generic JSON-RPC) ----------
+        BigInteger big = BigInteger.Zero;
+
+        for (int i = 0; i < utf8.Length; i++)
+        {
+            byte c = utf8[i];
+            if ((uint)(c - '0') > 9)
+                return false;
+
+            big = big * 10 + (c - '0');
+            if (big.GetByteCount(isUnsigned: false) > 32)
+                return false;
+        }
+
+        if (negative)
+            big = -big;
+
+        value = (int256)big;
+        return true;
+    }
+
+
     public static bool TryParse(ReadOnlySpan<char> hex, out int256 result)
     {
         result = Zero;

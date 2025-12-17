@@ -3,6 +3,7 @@ using EccentricWare.Web3.DataTypes.Utils;
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -223,10 +224,12 @@ public readonly struct Hash32 :
 
     #region Parsing
 
+
     /// <summary>
     /// Parses a 64-character hexadecimal string (with or without 0x prefix).
     /// Uses direct nibble parsing for maximum performance.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Hash32 Parse(ReadOnlySpan<char> hex)
     {
         if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
@@ -235,23 +238,38 @@ public readonly struct Hash32 :
         if (hex.Length != HexLength)
             ThrowHelper.ThrowFormatExceptionInvalidHexLength();
 
-        ulong u0 = ParseHexUInt64(hex.Slice(0, 16));
-        ulong u1 = ParseHexUInt64(hex.Slice(16, 16));
-        ulong u2 = ParseHexUInt64(hex.Slice(32, 16));
-        ulong u3 = ParseHexUInt64(hex.Slice(48, 16));
+        ulong u0 = ByteUtils.ParseHexUInt64(hex.Slice(0, 16));
+        ulong u1 = ByteUtils.ParseHexUInt64(hex.Slice(16, 16));
+        ulong u2 = ByteUtils.ParseHexUInt64(hex.Slice(32, 16));
+        ulong u3 = ByteUtils.ParseHexUInt64(hex.Slice(48, 16));
 
         return new Hash32(u0, u1, u2, u3);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static HexBigInteger Parse(ReadOnlySpan<byte> hexUtf8) => ParseHexUtf8(hexUtf8);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Hash32 Parse(string hex) => Parse(hex.AsSpan(), CultureInfo.InvariantCulture);
 
-    public static Hash32 Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s, CultureInfo.InvariantCulture);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Hash32 Parse(ReadOnlySpan<char> s, IFormatProvider? provider)
+    {
+        if (TryParse(s, provider, out var result))
+        {
+            return result;
+        }
 
+        throw new FormatException("Invalid hexadecimal string");
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Hash32 Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Tries to parse a hexadecimal string without exceptions.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool TryParse(ReadOnlySpan<char> hex, out Hash32 result)
     {
         result = Zero;
@@ -262,13 +280,13 @@ public readonly struct Hash32 :
         if (hex.Length != HexLength)
             return false;
 
-        if (!TryParseHexUInt64(hex.Slice(0, 16), out ulong u0))
+        if (!ByteUtils.TryParseHexUInt64(hex.Slice(0, 16), out ulong u0))
             return false;
-        if (!TryParseHexUInt64(hex.Slice(16, 16), out ulong u1))
+        if (!ByteUtils.TryParseHexUInt64(hex.Slice(16, 16), out ulong u1))
             return false;
-        if (!TryParseHexUInt64(hex.Slice(32, 16), out ulong u2))
+        if (!ByteUtils.TryParseHexUInt64(hex.Slice(32, 16), out ulong u2))
             return false;
-        if (!TryParseHexUInt64(hex.Slice(48, 16), out ulong u3))
+        if (!ByteUtils.TryParseHexUInt64(hex.Slice(48, 16), out ulong u3))
             return false;
 
         result = new Hash32(u0, u1, u2, u3);
@@ -277,43 +295,66 @@ public readonly struct Hash32 :
 
     #region Hex Parsing Helpers
 
+    /// <summary>
+    /// Parses a hexadecimal UTF-8 byte span (no 0x prefix).
+    /// Accepts odd-length hex (EVM minimal encoding).
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int ParseHexNibble(char c)
+    private static uint256 ParseHexUtf8(ReadOnlySpan<byte> hex)
     {
-        // Branchless hex nibble parsing
-        int val = c;
-        int digit = val - '0';
-        int lower = (val | 0x20) - 'a' + 10; // Case-insensitive a-f
-        
-        if ((uint)digit <= 9) return digit;
-        if ((uint)(lower - 10) <= 5) return lower;
-        return -1;
+        if (hex.Length == 0)
+            return uint256.Zero;
+
+        if (hex.Length > 64)
+            throw new FormatException("Hex value exceeds 256 bits");
+
+        ulong u0 = 0, u1 = 0, u2 = 0, u3 = 0;
+        int nibbleIndex = 0;
+
+        // Process from right to left (least significant nibble first)
+        for (int i = hex.Length - 1; i >= 0; i--)
+        {
+            byte c = hex[i];
+            int v =
+                (uint)(c - '0') <= 9 ? c - '0' :
+                (uint)((c | 0x20) - 'a') <= 5 ? (c | 0x20) - 'a' + 10 :
+                throw new FormatException("Invalid hex character");
+
+            int shift = (nibbleIndex & 15) << 2;
+
+            ref ulong limb = ref Unsafe.Add(ref u0, nibbleIndex >> 4);
+            limb |= (ulong)v << shift;
+
+            nibbleIndex++;
+        }
+
+        if (nibbleIndex > 64)
+            throw new FormatException("Hex value exceeds 256 bits");
+
+        return new uint256(u0, u1, u2, u3);
     }
 
+    /// <summary>
+    /// Parses a decimal UTF-8 byte span.
+    /// Uses BigInteger only for decimal path.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ulong ParseHexUInt64(ReadOnlySpan<char> hex)
+    private static uint256 ParseDecimalUtf8(ReadOnlySpan<byte> dec)
     {
-        ulong result = 0;
-        for (int i = 0; i < 16; i++)
-        {
-            int nibble = ParseHexNibble(hex[i]);
-            if (nibble < 0) ThrowHelper.ThrowFormatExceptionInvalidHex();
-            result = (result << 4) | (uint)nibble;
-        }
-        return result;
-    }
+        BigInteger value = BigInteger.Zero;
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TryParseHexUInt64(ReadOnlySpan<char> hex, out ulong result)
-    {
-        result = 0;
-        for (int i = 0; i < 16; i++)
+        for (int i = 0; i < dec.Length; i++)
         {
-            int nibble = ParseHexNibble(hex[i]);
-            if (nibble < 0) return false;
-            result = (result << 4) | (uint)nibble;
+            byte c = dec[i];
+            if ((uint)(c - '0') > 9)
+                throw new FormatException("Invalid decimal character");
+
+            value = value * 10 + (c - '0');
+            if (value.GetByteCount(isUnsigned: true) > 32)
+                throw new OverflowException("Decimal value exceeds 256 bits");
         }
-        return true;
+
+        return (uint256)value;
     }
 
     #endregion

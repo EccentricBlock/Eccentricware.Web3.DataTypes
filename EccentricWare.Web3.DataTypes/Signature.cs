@@ -415,6 +415,13 @@ public readonly struct Signature :
         return default; // Unreachable
     }
 
+    public static Signature Parse(ReadOnlySpan<byte> utf8)
+    {
+        if (!TryParse(utf8, out var value))
+            ThrowHelper.ThrowFormatExceptionInvalidSignatureHexLength();
+        return value;
+    }
+
     private static Signature ParseEvmHex(ReadOnlySpan<char> hex)
     {
         Span<byte> bytes = stackalloc byte[EvmByteLength];
@@ -476,6 +483,73 @@ public readonly struct Signature :
 
         return false;
     }
+
+
+    /// <summary>
+    /// Tries to parse a UTF-8 encoded JSON-RPC signature value.
+    /// Allocation-free; uses stack buffers only.
+    /// </summary>
+    public static bool TryParse(ReadOnlySpan<byte> utf8, out Signature value)
+    {
+        value = Zero;
+
+        if (utf8.Length == 0)
+            return false;
+
+        // Trim surrounding quotes
+        if (utf8.Length >= 2 && utf8[0] == (byte)'"' && utf8[^1] == (byte)'"')
+            utf8 = utf8.Slice(1, utf8.Length - 2);
+
+        if (utf8.Length == 0)
+            return false;
+
+        // Optional 0x prefix
+        if (utf8.Length >= 2 && utf8[0] == (byte)'0' && (utf8[1] | 0x20) == (byte)'x')
+            utf8 = utf8.Slice(2);
+
+        int hexLen = utf8.Length;
+
+        // ---------- EVM signature (65 bytes / 130 hex) ----------
+        if (hexLen == EvmHexLength)
+        {
+            Span<byte> bytes = stackalloc byte[EvmByteLength];
+
+            for (int i = 0, j = 0; i < EvmByteLength; i++, j += 2)
+            {
+                int hi = ByteUtils.ParseHexNibbleUtf8(utf8[j]);
+                int lo = ByteUtils.ParseHexNibbleUtf8(utf8[j + 1]);
+                if ((hi | lo) < 0)
+                    return false;
+
+                bytes[i] = (byte)((hi << 4) | lo);
+            }
+
+            value = FromEvmBytes(bytes);
+            return true;
+        }
+
+        // ---------- Solana signature (64 bytes / 128 hex) ----------
+        if (hexLen == SolanaHexLength)
+        {
+            Span<byte> bytes = stackalloc byte[SolanaByteLength];
+
+            for (int i = 0, j = 0; i < SolanaByteLength; i++, j += 2)
+            {
+                int hi = ByteUtils.ParseHexNibbleUtf8(utf8[j]);
+                int lo = ByteUtils.ParseHexNibbleUtf8(utf8[j + 1]);
+                if ((hi | lo) < 0)
+                    return false;
+
+                bytes[i] = (byte)((hi << 4) | lo);
+            }
+
+            value = FromSolanaBytes(bytes);
+            return true;
+        }
+
+        return false;
+    }
+
 
     private static bool TryParseEvmHex(ReadOnlySpan<char> hex, out Signature result)
     {

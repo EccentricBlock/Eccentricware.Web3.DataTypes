@@ -1,9 +1,12 @@
+using EccentricWare.Web3.DataTypes.JsonConverters;
+using EccentricWare.Web3.DataTypes.Utils;
+using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
-using EccentricWare.Web3.DataTypes.JsonConverters;
+using System.Text.Unicode;
 
 namespace EccentricWare.Web3.DataTypes;
 
@@ -52,6 +55,11 @@ public readonly struct HexBigInteger :
     public HexBigInteger(ReadOnlySpan<byte> bigEndianBytes, bool isUnsigned = true)
     {
         _value = new BigInteger(bigEndianBytes, isUnsigned, isBigEndian: true);
+    }
+
+    public HexBigInteger(ReadOnlySpan<byte> utf8Bytes)
+    {
+        _value = Parse(utf8Bytes);
     }
 
     /// <summary>
@@ -256,6 +264,19 @@ public readonly struct HexBigInteger :
     /// Parses a hexadecimal string (with or without 0x prefix).
     /// Supports negative values with leading '-'.
     /// </summary>
+    /// 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static HexBigInteger Parse(ReadOnlySpan<byte> hex)
+    {
+        if(TryParse(hex, out var result))
+        {
+            return result; 
+        }
+         
+        throw new FormatException("Invalid hexadecimal string");
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static HexBigInteger Parse(ReadOnlySpan<char> hex)
     {
         bool negative = false;
@@ -277,15 +298,78 @@ public readonly struct HexBigInteger :
         return new HexBigInteger(negative ? -value : value);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static HexBigInteger Parse(string hex) => Parse(hex.AsSpan(), CultureInfo.InvariantCulture);
 
-    public static HexBigInteger Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s, CultureInfo.InvariantCulture);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static HexBigInteger Parse(ReadOnlySpan<char> s, IFormatProvider? provider)
+    {
+        if (TryParse(s, provider, out var result))
+        {
+            return result;
+        }
 
+        throw new FormatException("Invalid hexadecimal string");
+    }
     public static HexBigInteger Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Tries to parse a hexadecimal string without throwing exceptions.
     /// </summary>
+    /// 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParse(ReadOnlySpan<byte> hex, out HexBigInteger result)
+    {
+        result = default!;
+
+        if (hex.Length == 0)
+            return false;
+
+        // null
+        if (hex.SequenceEqual("null"u8))
+            return true;
+
+        // String token: "0x..."
+        if (hex[0] == (byte)'"')
+        {
+            if (hex.Length < 4 || hex[^1] != (byte)'"')
+                return false;
+
+            var inner = hex.Slice(1, hex.Length - 2);
+
+            if (inner.Length >= 2 &&
+                inner[0] == (byte)'0' &&
+                (inner[1] == (byte)'x' || inner[1] == (byte)'X'))
+            {
+                var hexInner = inner.Slice(2);
+                if (hexInner.Length == 0)
+                {
+                    result = new HexBigInteger(BigInteger.Zero);
+                    return true;
+                }
+
+                if (!TryParseHexBigEndian(hexInner, out var bi))
+                    return false;
+
+                result = new HexBigInteger(bi);
+                return true;
+            }
+
+            return false;
+        }
+
+        // Numeric token (rare but legal in some clients)
+        // Parse as decimal, no allocations
+        //if (TryParseDecimal(hex, out var dec))
+        //{
+        //    result = new HexBigInteger(dec);
+        //    return true;
+        //}
+
+        return false;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool TryParse(ReadOnlySpan<char> hex, out HexBigInteger result)
     {
         result = Zero;
@@ -323,6 +407,7 @@ public readonly struct HexBigInteger :
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool TryParse(string? hex, out HexBigInteger result)
     {
         if (string.IsNullOrEmpty(hex))
@@ -333,15 +418,18 @@ public readonly struct HexBigInteger :
         return TryParse(hex.AsSpan(), out result);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool TryParse(ReadOnlySpan<char> s, IFormatProvider? provider, out HexBigInteger result)
         => TryParse(s, out result);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool TryParse([NotNullWhen(true)] string? s, IFormatProvider? provider, out HexBigInteger result)
         => TryParse(s, out result);
 
     /// <summary>
     /// Parses a decimal string.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static HexBigInteger ParseDecimal(ReadOnlySpan<char> value)
     {
         if (value.Length == 0)
@@ -356,6 +444,7 @@ public readonly struct HexBigInteger :
     /// <summary>
     /// Tries to parse a decimal string.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool TryParseDecimal(ReadOnlySpan<char> value, out HexBigInteger result)
     {
         result = Zero;
@@ -432,6 +521,7 @@ public readonly struct HexBigInteger :
     /// Tries to format the value into the destination span.
     /// Zero-allocation implementation that writes directly to the destination.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryFormat(Span<char> destination, out int charsWritten, ReadOnlySpan<char> format = default, IFormatProvider? provider = null)
     {
         charsWritten = 0;
@@ -487,6 +577,7 @@ public readonly struct HexBigInteger :
     /// Tries to format the value into the destination UTF-8 byte span.
     /// Zero heap allocation for typical blockchain values (up to 1024 bits).
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryFormat(Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format = default, IFormatProvider? provider = null)
     {
         // Estimate required size: 2 hex chars per byte + prefix + sign
@@ -538,6 +629,7 @@ public readonly struct HexBigInteger :
     /// Returns the hexadecimal representation with specified minimum digits (no 0x prefix).
     /// Pads with leading zeros if necessary. Optimized for minimal allocations.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public string ToHexString(int minDigits = 0)
     {
         if (_value.IsZero)
@@ -582,6 +674,7 @@ public readonly struct HexBigInteger :
     /// Returns the value as a big-endian byte array.
     /// Compatible with EVM and Solana encoding.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public byte[] ToBigEndianBytes()
     {
         return _value.ToByteArray(isUnsigned: _value.Sign >= 0, isBigEndian: true);
@@ -591,6 +684,7 @@ public readonly struct HexBigInteger :
     /// Returns the value as a little-endian byte array.
     /// Compatible with Solana native encoding.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public byte[] ToLittleEndianBytes()
     {
         return _value.ToByteArray(isUnsigned: _value.Sign >= 0, isBigEndian: false);
@@ -599,13 +693,14 @@ public readonly struct HexBigInteger :
     /// <summary>
     /// Returns the value as a big-endian byte array, padded to the specified length.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public byte[] ToBigEndianBytes(int length)
     {
-        var bytes = ToBigEndianBytes();
+        byte[] bytes = ToBigEndianBytes();
         if (bytes.Length >= length)
             return bytes;
 
-        var padded = new byte[length];
+        byte[] padded = new byte[length];
         bytes.CopyTo(padded, length - bytes.Length);
         return padded;
     }
@@ -613,6 +708,7 @@ public readonly struct HexBigInteger :
     /// <summary>
     /// Writes the value as a big-endian byte array to the destination.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int WriteBigEndian(Span<byte> destination)
     {
         return _value.TryWriteBytes(destination, out int bytesWritten, isUnsigned: _value.Sign >= 0, isBigEndian: true)
@@ -623,6 +719,7 @@ public readonly struct HexBigInteger :
     /// <summary>
     /// Writes the value as a little-endian byte array to the destination.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int WriteLittleEndian(Span<byte> destination)
     {
         return _value.TryWriteBytes(destination, out int bytesWritten, isUnsigned: _value.Sign >= 0, isBigEndian: false)
@@ -633,17 +730,52 @@ public readonly struct HexBigInteger :
     /// <summary>
     /// Tries to write the value as big-endian bytes.
     /// </summary>
-    public bool TryWriteBigEndian(Span<byte> destination, out int bytesWritten)
-    {
-        return _value.TryWriteBytes(destination, out bytesWritten, isUnsigned: _value.Sign >= 0, isBigEndian: true);
-    }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryWriteBigEndian(Span<byte> destination, out int bytesWritten) => _value.TryWriteBytes(destination, out bytesWritten, isUnsigned: _value.Sign >= 0, isBigEndian: true);
 
     /// <summary>
     /// Tries to write the value as little-endian bytes.
     /// </summary>
-    public bool TryWriteLittleEndian(Span<byte> destination, out int bytesWritten)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryWriteLittleEndian(Span<byte> destination, out int bytesWritten) => _value.TryWriteBytes(destination, out bytesWritten, isUnsigned: _value.Sign >= 0, isBigEndian: false);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool TryParseHexBigEndian(
+        ReadOnlySpan<byte> hex,
+        out BigInteger value)
     {
-        return _value.TryWriteBytes(destination, out bytesWritten, isUnsigned: _value.Sign >= 0, isBigEndian: false);
+        value = BigInteger.Zero;
+
+        int byteLen = (hex.Length + 1) >> 1;
+        Span<byte> tmp = byteLen <= 64
+            ? stackalloc byte[byteLen]
+            : new byte[byteLen];
+
+        int hi = hex.Length & 1;
+        int src = 0;
+        int dst = 0;
+
+        if (hi == 1)
+        {
+            if (!ByteUtils.TryHexNibble(hex[src++], out var n))
+                return false;
+
+            tmp[dst++] = n;
+        }
+
+        while (src < hex.Length)
+        {
+            if (!ByteUtils.TryHexNibble(hex[src++], out var hiNib) ||
+                !ByteUtils.TryHexNibble(hex[src++], out var loNib))
+                return false;
+
+            tmp[dst++] = (byte)((hiNib << 4) | loNib);
+        }
+
+        // BigInteger expects little-endian; reverse
+        tmp[..dst].Reverse();
+        value = new BigInteger(tmp[..dst], isUnsigned: true, isBigEndian: false);
+        return true;
     }
 
     #endregion
@@ -715,12 +847,13 @@ public readonly struct HexBigInteger :
     /// Returns the value as a 32-byte ABI-encoded value (big-endian, left-padded).
     /// Standard EVM ABI encoding for uint256/int256.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public byte[] ToAbiEncoded()
     {
         if (_value.Sign < 0)
         {
             // Two's complement for negative values
-            var twosComplement = (BigInteger.One << 256) + _value;
+            BigInteger twosComplement = (BigInteger.One << 256) + _value;
             Span<byte> bytes = stackalloc byte[32];
             twosComplement.TryWriteBytes(bytes, out _, isUnsigned: true, isBigEndian: true);
             return bytes.ToArray();
@@ -732,12 +865,13 @@ public readonly struct HexBigInteger :
     /// <summary>
     /// Parses an ABI-encoded value.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static HexBigInteger FromAbiEncoded(ReadOnlySpan<byte> data, bool isSigned = false)
     {
         if (data.Length < 32)
             throw new ArgumentException("ABI encoded value requires at least 32 bytes", nameof(data));
 
-        var value = new BigInteger(data.Slice(0, 32), isUnsigned: !isSigned, isBigEndian: true);
+        BigInteger value = new BigInteger(data.Slice(0, 32), isUnsigned: !isSigned, isBigEndian: true);
         
         if (isSigned && value > (BigInteger.One << 255) - 1)
         {
@@ -772,6 +906,7 @@ public readonly struct HexBigInteger :
     /// <summary>
     /// Creates a wei value from ether.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static HexBigInteger FromEther(decimal ether)
     {
         var wei = ether * 1_000_000_000_000_000_000m;
@@ -781,6 +916,7 @@ public readonly struct HexBigInteger :
     /// <summary>
     /// Creates a lamports value from SOL.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static HexBigInteger FromSol(decimal sol)
     {
         var lamports = sol * 1_000_000_000m;

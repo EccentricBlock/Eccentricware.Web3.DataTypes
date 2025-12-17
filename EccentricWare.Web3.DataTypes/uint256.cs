@@ -1,3 +1,5 @@
+using EccentricWare.Web3.DataTypes.JsonConverters;
+using EccentricWare.Web3.DataTypes.Utils;
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
@@ -6,7 +8,6 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Text.Json.Serialization;
-using EccentricWare.Web3.DataTypes.JsonConverters;
 
 namespace EccentricWare.Web3.DataTypes;
 
@@ -815,6 +816,11 @@ public readonly struct uint256 :
     /// Parses a hexadecimal string (with or without 0x prefix).
     /// Allocation-free using span-based parsing.
     /// </summary>
+    /// 
+
+
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static uint256 Parse(ReadOnlySpan<char> hex)
     {
         if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
@@ -844,15 +850,128 @@ public readonly struct uint256 :
         return new uint256(u0, u1, u2, u3);
     }
 
+    public static uint256 Parse(ReadOnlySpan<byte> utf8)
+    {
+        if (!TryParse(utf8, out var value))
+            throw new FormatException("Invalid uint256 JSON-RPC value");
+        return value;
+    }
+
     public static uint256 Parse(string hex) => Parse(hex.AsSpan(), CultureInfo.InvariantCulture);
 
-    public static uint256 Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s, CultureInfo.InvariantCulture);
+    public static uint256 Parse(ReadOnlySpan<char> s, IFormatProvider? provider)
+    {
+        if (TryParse(s, provider, out var result))
+        {
+            return result;
+        }
 
-    public static uint256 Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
+        throw new FormatException("Invalid hexadecimal string");
+    }
+
+    public static uint256 Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), provider);
 
     /// <summary>
     /// Tries to parse a hexadecimal string without exceptions.
     /// </summary>
+
+    /// <summary>
+    /// Tries to parse a UTF-8 encoded JSON-RPC numeric value without throwing.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParse(ReadOnlySpan<byte> utf8, out uint256 value)
+    {
+        value = Zero;
+
+        if (utf8.Length == 0)
+            return true;
+
+        // Trim surrounding quotes if present
+        if (utf8.Length >= 2 && utf8[0] == (byte)'"' && utf8[^1] == (byte)'"')
+            utf8 = utf8.Slice(1, utf8.Length - 2);
+
+        if (utf8.Length == 0)
+            return true;
+
+        // ---------- EVM hex path ----------
+        if (utf8.Length >= 2 && utf8[0] == (byte)'0' && (utf8[1] | 0x20) == (byte)'x')
+        {
+            utf8 = utf8.Slice(2);
+            if (utf8.Length == 0)
+                return true;
+
+            if (utf8.Length > 64)
+                return false;
+
+            ulong u0 = 0, u1 = 0, u2 = 0, u3 = 0;
+
+            int nibbleCount = utf8.Length;
+            int limb = 0;
+            ulong acc = 0;
+            int shift = 0;
+
+            // Parse from least-significant nibble
+            for (int i = nibbleCount - 1; i >= 0; i--)
+            {
+                int n = ByteUtils.ParseHexNibbleUtf8(utf8[i]);
+                if (n < 0)
+                    return false;
+
+                acc |= (ulong)n << shift;
+                shift += 4;
+
+                if (shift == 64)
+                {
+                    switch (limb)
+                    {
+                        case 0: u0 = acc; break;
+                        case 1: u1 = acc; break;
+                        case 2: u2 = acc; break;
+                        case 3: u3 = acc; break;
+                        default: return false;
+                    }
+                    limb++;
+                    acc = 0;
+                    shift = 0;
+                }
+            }
+
+            if (shift != 0)
+            {
+                switch (limb)
+                {
+                    case 0: u0 = acc; break;
+                    case 1: u1 = acc; break;
+                    case 2: u2 = acc; break;
+                    case 3: u3 = acc; break;
+                    default: return false;
+                }
+            }
+
+            value = new uint256(u0, u1, u2, u3);
+            return true;
+        }
+
+        // ---------- Solana decimal path ----------
+        // Decimal numbers are small enough to require BigInteger only in edge cases.
+        BigInteger big = BigInteger.Zero;
+
+        for (int i = 0; i < utf8.Length; i++)
+        {
+            byte c = utf8[i];
+            if ((uint)(c - '0') > 9)
+                return false;
+
+            big = big * 10 + (c - '0');
+            if (big.GetByteCount(isUnsigned: true) > 32)
+                return false;
+        }
+
+        value = (uint256)big;
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool TryParse(ReadOnlySpan<char> hex, out uint256 result)
     {
         result = Zero;

@@ -10,6 +10,11 @@ namespace EccentricWare.Web3.DataTypes.Utils;
 /// </summary>
 internal static class ThrowHelper
 {
+    [DoesNotReturn]
+    public static void ThrowFormatExceptionInvalidAddress()
+        => throw new FormatException("Invalid blockchain address format");
+
+
     // Hash32 exceptions
     [DoesNotReturn]
     public static void ThrowArgumentExceptionInvalidLength(string paramName)

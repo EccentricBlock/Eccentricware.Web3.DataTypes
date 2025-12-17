@@ -3,7 +3,6 @@ using EccentricWare.Web3.DataTypes.Utils;
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -369,9 +368,24 @@ public readonly struct Address :
 
     public static Address Parse(string s) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
 
-    public static Address Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s, CultureInfo.InvariantCulture);
+    public static Address Parse(ReadOnlySpan<char> s, IFormatProvider? provider)
+    {
+        if (TryParse(s, provider, out var result))
+        {
+            return result;
+        }
 
-    public static Address Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
+        throw new FormatException("Invalid hexadecimal string");
+    }
+
+    public static Address Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), provider);
+
+    public static Address Parse(ReadOnlySpan<byte> utf8)
+    {
+        if (!TryParse(utf8, out var result))
+            ThrowHelper.ThrowFormatExceptionInvalidAddress();
+        return result;
+    }
 
     /// <summary>
     /// Tries to parse an address string without exceptions.
@@ -414,6 +428,47 @@ public readonly struct Address :
         result = new Address(u0, u1, (ulong)u2Upper << 32, 0, AddressType.Evm);
         return true;
     }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool TryParseEvmUtf8(ReadOnlySpan<byte> utf8, out Address result)
+    {
+        result = Zero;
+
+        // Skip 0x
+        utf8 = utf8.Slice(2);
+
+        if (utf8.Length != EvmHexLength)
+            return false;
+
+        ulong u0 = 0, u1 = 0;
+        uint u2Upper = 0;
+
+        // First 16 hex chars → u0
+        for (int i = 0; i < 16; i++)
+        {
+            int n = ByteUtils.ParseHexNibbleUtf8(utf8[i]);
+            if (n < 0) return false;
+            u0 = (u0 << 4) | (uint)n;
+        }
+
+        // Next 16 hex chars → u1
+        for (int i = 16; i < 32; i++)
+        {
+            int n = ByteUtils.ParseHexNibbleUtf8(utf8[i]);
+            if (n < 0) return false;
+            u1 = (u1 << 4) | (uint)n;
+        }
+
+        // Last 8 hex chars → upper 32 bits of u2
+        for (int i = 32; i < 40; i++)
+        {
+            int n = ByteUtils.ParseHexNibbleUtf8(utf8[i]);
+            if (n < 0) return false;
+            u2Upper = (u2Upper << 4) | (uint)n;
+        }
+
+        result = new Address(u0, u1, (ulong)u2Upper << 32, 0, AddressType.Evm);
+        return true;
+    }
 
     /// <summary>
     /// Tries to parse a Solana address without exceptions.
@@ -442,6 +497,63 @@ public readonly struct Address :
         return TryParse(s.AsSpan(), out result);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParseSolanaUtf8(ReadOnlySpan<byte> utf8, out Address result)
+    {
+        result = Zero;
+
+        if (utf8.Length == 0 || utf8.Length > MaxBase58Length)
+            return false;
+
+        ulong u0 = 0, u1 = 0, u2 = 0, u3 = 0;
+
+        // Count leading '1's (leading zero bytes)
+        int i = 0;
+        while (i < utf8.Length && utf8[i] == (byte)'1')
+            i++;
+
+        for (; i < utf8.Length; i++)
+        {
+            byte b = utf8[i];
+            if (b >= 128)
+                return false;
+
+            int digit = Base58DecodeMap[b];
+            if (digit < 0)
+                return false;
+
+            if (!MulAdd58(ref u0, ref u1, ref u2, ref u3, (ulong)digit))
+                return false;
+        }
+
+        result = new Address(u0, u1, u2, u3, AddressType.Solana);
+        return true;
+    }
+    /// <summary>
+    /// Tries to parse an address from UTF-8 JSON-RPC data without allocations.
+    /// Accepts quoted or unquoted strings.
+    /// </summary>
+    public static bool TryParse(ReadOnlySpan<byte> utf8, out Address result)
+    {
+        result = Zero;
+
+        if (utf8.Length == 0)
+            return false;
+
+        // Trim surrounding quotes if present
+        if (utf8.Length >= 2 && utf8[0] == (byte)'"' && utf8[^1] == (byte)'"')
+            utf8 = utf8.Slice(1, utf8.Length - 2);
+
+        if (utf8.Length == 0)
+            return false;
+
+        // EVM: starts with 0x / 0X
+        if (utf8.Length >= 2 && utf8[0] == (byte)'0' && (utf8[1] | 0x20) == (byte)'x')
+            return TryParseEvmUtf8(utf8, out result);
+
+        // Otherwise assume Base58 (Solana)
+        return TryParseSolanaUtf8(utf8, out result);
+    }
     public static bool TryParse(ReadOnlySpan<char> s, IFormatProvider? provider, out Address result)
         => TryParse(s, out result);
 
@@ -451,25 +563,12 @@ public readonly struct Address :
     #region Hex Parsing Helpers
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int ParseHexNibble(char c)
-    {
-        // Branchless hex nibble parsing using lookup
-        int val = c;
-        int digit = val - '0';
-        int lower = (val | 0x20) - 'a' + 10; // Case-insensitive a-f
-        
-        if ((uint)digit <= 9) return digit;
-        if ((uint)(lower - 10) <= 5) return lower;
-        return -1;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ulong ParseHexUInt64(ReadOnlySpan<char> hex)
     {
         ulong result = 0;
         for (int i = 0; i < 16; i++)
         {
-            int nibble = ParseHexNibble(hex[i]);
+            int nibble = ByteUtils.ParseHexNibble(hex[i]);
             if (nibble < 0) ThrowHelper.ThrowFormatExceptionInvalidHex();
             result = (result << 4) | (uint)nibble;
         }
@@ -482,7 +581,7 @@ public readonly struct Address :
         result = 0;
         for (int i = 0; i < 16; i++)
         {
-            int nibble = ParseHexNibble(hex[i]);
+            int nibble = ByteUtils.ParseHexNibble(hex[i]);
             if (nibble < 0) return false;
             result = (result << 4) | (uint)nibble;
         }
@@ -495,7 +594,7 @@ public readonly struct Address :
         uint result = 0;
         for (int i = 0; i < 8; i++)
         {
-            int nibble = ParseHexNibble(hex[i]);
+            int nibble = ByteUtils.ParseHexNibble(hex[i]);
             if (nibble < 0) ThrowHelper.ThrowFormatExceptionInvalidHex();
             result = (result << 4) | (uint)nibble;
         }
@@ -508,7 +607,7 @@ public readonly struct Address :
         result = 0;
         for (int i = 0; i < 8; i++)
         {
-            int nibble = ParseHexNibble(hex[i]);
+            int nibble = ByteUtils.ParseHexNibble(hex[i]);
             if (nibble < 0) return false;
             result = (result << 4) | (uint)nibble;
         }
