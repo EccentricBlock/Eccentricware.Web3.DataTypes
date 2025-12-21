@@ -1,16 +1,11 @@
-﻿using System;
-using System.Numerics;
+﻿using System.Numerics;
 using System.Runtime.CompilerServices;
-using System.Text;
 
 namespace EccentricWare.Web3.DataTypes;
 
 /// <summary>
 /// Slow-path members for <see cref="uint256"/>.
 /// </summary>
-/// <remarks>
-/// Metadata tags: [slowpath] [bigint] [formatting] [allocates]
-/// </remarks>
 public readonly partial struct uint256
 {
     /// <summary>
@@ -30,7 +25,6 @@ public readonly partial struct uint256
     /// <summary>
     /// Creates a <see cref="uint256"/> from a non-negative <see cref="BigInteger"/> that fits into 256 bits.
     /// </summary>
-    /// <remarks>Metadata tags: [slowpath] [bigint]</remarks>
     public static uint256 FromBigInteger(BigInteger value)
     {
         if (value.Sign < 0)
@@ -52,19 +46,16 @@ public readonly partial struct uint256
     /// <summary>
     /// Implicit conversion to <see cref="BigInteger"/> (slow-path).
     /// </summary>
-    /// <remarks>Metadata tags: [slowpath] [bigint]</remarks>
     public static implicit operator BigInteger(uint256 value) => value.ToBigInteger();
 
     /// <summary>
     /// Explicit conversion from <see cref="BigInteger"/> (slow-path).
     /// </summary>
-    /// <remarks>Metadata tags: [slowpath] [bigint]</remarks>
     public static explicit operator uint256(BigInteger value) => FromBigInteger(value);
 
     /// <summary>
     /// Default string representation: canonical EVM quantity (lowercase).
     /// </summary>
-    /// <remarks>Metadata tags: [slowpath] [string]</remarks>
     public override string ToString()
     {
         // Uses span formatting (hot-path code), allocates only the final string.

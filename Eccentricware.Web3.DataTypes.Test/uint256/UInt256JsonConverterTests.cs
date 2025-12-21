@@ -3,7 +3,7 @@ using EccentricWare.Web3.DataTypes.JsonConverters;
 using EccentricWare.Web3.DataTypes.Utils.Uint256;
 using UInt256 = EccentricWare.Web3.DataTypes.uint256;
 
-namespace EccentricWare.Web3.DataTypes.Tests;
+namespace EccentricWare.Web3.DataTypes.Tests.uint256;
 
 [TestClass]
 public sealed class UInt256JsonConverterTests

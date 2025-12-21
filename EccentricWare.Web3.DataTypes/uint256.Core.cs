@@ -14,7 +14,6 @@ namespace EccentricWare.Web3.DataTypes;
 /// Fixed-size 256-bit unsigned integer optimised for indexing, JSON-RPC parsing, and base-unit coin arithmetic.
 /// </summary>
 /// <remarks>
-/// Metadata tags: [hotpath] [indexing] [json] [erc20] [no-gc]
 ///
 /// Formatting rules:
 /// - Default format (empty / null) is EVM quantity: "0x" + minimal hex (lowercase), and "0x0" for zero.
@@ -69,7 +68,6 @@ public readonly partial struct uint256 :
     /// <summary>
     /// Creates a value from a 64-bit unsigned integer.
     /// </summary>
-    /// <remarks>Metadata tags: [hotpath]</remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public uint256(ulong value)
     {
@@ -82,7 +80,6 @@ public readonly partial struct uint256 :
     /// <summary>
     /// Creates a value from four 64-bit limbs (little-endian).
     /// </summary>
-    /// <remarks>Metadata tags: [hotpath]</remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public uint256(ulong limb0, ulong limb1, ulong limb2, ulong limb3)
     {
@@ -95,7 +92,6 @@ public readonly partial struct uint256 :
     /// <summary>
     /// True if the value equals zero.
     /// </summary>
-    /// <remarks>Metadata tags: [hotpath]</remarks>
     public bool IsZero
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -105,7 +101,6 @@ public readonly partial struct uint256 :
     /// <summary>
     /// Writes the value into a 32-byte big-endian destination span (ABI/key canonical form).
     /// </summary>
-    /// <remarks>Metadata tags: [hotpath] [abi] [bytes32]</remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteBigEndian(Span<byte> destination32)
     {
@@ -121,7 +116,6 @@ public readonly partial struct uint256 :
     /// <summary>
     /// Writes the value into a 32-byte little-endian destination span (Solana/native).
     /// </summary>
-    /// <remarks>Metadata tags: [hotpath] [solana] [bytes]</remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteLittleEndian(Span<byte> destination32)
     {
@@ -137,7 +131,6 @@ public readonly partial struct uint256 :
     /// <summary>
     /// Creates a value from a 32-byte big-endian span.
     /// </summary>
-    /// <remarks>Metadata tags: [hotpath] [abi] [bytes32]</remarks>
     public static uint256 FromBigEndian32(ReadOnlySpan<byte> source32BigEndian)
     {
         if (source32BigEndian.Length != 32)
@@ -154,7 +147,6 @@ public readonly partial struct uint256 :
     /// <summary>
     /// Parses a UTF-8 value according to a strict mode suitable for firewall enforcement.
     /// </summary>
-    /// <remarks>Metadata tags: [hotpath] [json] [firewall] [canonicalisation]</remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool TryParse(ReadOnlySpan<byte> utf8Value, UInt256ParseMode parseMode, out uint256 parsedValue)
         => UInt256Parser.TryParseUtf8(utf8Value, parseMode, out parsedValue);
@@ -162,7 +154,6 @@ public readonly partial struct uint256 :
     /// <summary>
     /// Tries to read a JSON-RPC numeric value from a <see cref="Utf8JsonReader"/> (hot-path friendly).
     /// </summary>
-    /// <remarks>Metadata tags: [hotpath] [json] [firewall]</remarks>
     public static bool TryReadJsonRpcValue(ref Utf8JsonReader jsonReader, UInt256ParseMode parseMode, out uint256 parsedValue)
         => UInt256Parser.TryReadJsonRpcValue(ref jsonReader, parseMode, out parsedValue);
 
@@ -225,7 +216,6 @@ public readonly partial struct uint256 :
     /// <summary>
     /// Returns a stable 64-bit hash suitable for indexing and sharding.
     /// </summary>
-    /// <remarks>Metadata tags: [hotpath] [indexing] [stable-hash]</remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ulong GetStableHash64()
     {
@@ -690,7 +680,6 @@ public readonly partial struct uint256 :
     /// <summary>
     /// Scales the value up by 10^decimals (typical for converting token units to base units), with a fast-path for decimals 0..19.
     /// </summary>
-    /// <remarks>Metadata tags: [hotpath] [erc20] [pow10]</remarks>
     public bool TryScaleUpPow10(byte decimalPlaces, out uint256 scaledValue)
     {
         if (UInt256Pow10.TryGetPow10U64(decimalPlaces, out ulong pow10))
@@ -706,7 +695,6 @@ public readonly partial struct uint256 :
     /// <summary>
     /// Scales the value down by 10^decimals (fast-path only for 0..19), returning remainder.
     /// </summary>
-    /// <remarks>Metadata tags: [hotpath] [erc20] [pow10]</remarks>
     public uint256 ScaleDownPow10Fast(byte decimalPlaces, out ulong remainder)
     {
         if (!UInt256Pow10.TryGetPow10U64(decimalPlaces, out ulong pow10))
@@ -718,13 +706,11 @@ public readonly partial struct uint256 :
     /// <summary>
     /// Left shift (correct for all shift values; shifts ≥ 256 yield zero).
     /// </summary>
-    /// <remarks>Metadata tags: [hotpath] [bitops]</remarks>
     public static uint256 operator <<(uint256 value, int shift) => ShiftLeft(value, shift);
 
     /// <summary>
     /// Right shift (correct for all shift values; shifts ≥ 256 yield zero).
     /// </summary>
-    /// <remarks>Metadata tags: [hotpath] [bitops]</remarks>
     public static uint256 operator >>(uint256 value, int shift) => ShiftRight(value, shift);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
