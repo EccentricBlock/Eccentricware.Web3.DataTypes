@@ -334,10 +334,10 @@ public readonly struct Hash32 :
             return false;
 
         // Parse 64 hex nibbles -> 4 x ulong (big-endian)
-        if (!ByteUtils.TryParseHexUInt64Utf8(utf8.Slice(0, 16), out ulong u0)) return false;
-        if (!ByteUtils.TryParseHexUInt64Utf8(utf8.Slice(16, 16), out ulong u1)) return false;
-        if (!ByteUtils.TryParseHexUInt64Utf8(utf8.Slice(32, 16), out ulong u2)) return false;
-        if (!ByteUtils.TryParseHexUInt64Utf8(utf8.Slice(48, 16), out ulong u3)) return false;
+        if (!ByteUtils.TryParseHexUInt64Utf8Variable(utf8.Slice(0, 16), out ulong u0)) return false;
+        if (!ByteUtils.TryParseHexUInt64Utf8Variable(utf8.Slice(16, 16), out ulong u1)) return false;
+        if (!ByteUtils.TryParseHexUInt64Utf8Variable(utf8.Slice(32, 16), out ulong u2)) return false;
+        if (!ByteUtils.TryParseHexUInt64Utf8Variable(utf8.Slice(48, 16), out ulong u3)) return false;
 
         result = new Hash32(u0, u1, u2, u3);
         return true;

@@ -722,12 +722,13 @@ public readonly struct int256 :
         if (hex.Length > 64)
             throw new FormatException("Hex string too long for int256");
 
-        // Parse as unsigned first
-        if (!uint256.TryParse(hex, out var unsigned))
-            throw new FormatException("Invalid hex string");
+        //// Parse as unsigned first
+        //if (!uint256.TryParse(hex, out var unsigned))
+        //    throw new FormatException("Invalid hex string");
 
-        var result = new int256(unsigned._GetU0(), unsigned._GetU1(), unsigned._GetU2(), unsigned._GetU3());
-        return negative ? -result : result;
+        //var result = new int256(unsigned._GetU0(), unsigned._GetU1(), unsigned._GetU2(), unsigned._GetU3());
+        //return negative ? -result : result;
+        return Parse(hex, CultureInfo.InvariantCulture);
     }
 
     public static int256 Parse(string hex) => Parse(hex.AsSpan(), CultureInfo.InvariantCulture);
@@ -875,12 +876,13 @@ public readonly struct int256 :
         if (hex.Length > 64)
             return false;
 
-        if (!uint256.TryParse(hex, out var unsigned))
-            return false;
+        //if (!uint256.TryParse(hex, Utils.Uint256.UInt256ParseMode.DecimalUnsigned, out var unsigned))
+        //    return false;
 
-        result = new int256(unsigned._GetU0(), unsigned._GetU1(), unsigned._GetU2(), unsigned._GetU3());
-        if (negative)
-            result = -result;
+        //result = new int256(unsigned._GetU0(), unsigned._GetU1(), unsigned._GetU2(), unsigned._GetU3());
+        //if (negative)
+        //    result = -result;
+
         return true;
     }
 

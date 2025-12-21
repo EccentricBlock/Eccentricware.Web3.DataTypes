@@ -253,8 +253,8 @@ public readonly struct HexBigInteger :
     /// <summary>
     /// Creates from uint256.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static HexBigInteger FromUInt256(uint256 value) => value;
+    //[MethodImpl(MethodImplOptions.AggressiveInlining)]
+    //public static HexBigInteger FromUInt256(uint256 value) => value;
 
     #endregion
 
@@ -755,22 +755,22 @@ public readonly struct HexBigInteger :
         int src = 0;
         int dst = 0;
 
-        if (hi == 1)
-        {
-            if (!ByteUtils.TryHexNibble(hex[src++], out var n))
-                return false;
+        //if (hi == 1)
+        //{
+        //    if (!ByteUtils.TryHexNibble(hex[src++], out var n))
+        //        return false;
 
-            tmp[dst++] = n;
-        }
+        //    tmp[dst++] = n;
+        //}
 
-        while (src < hex.Length)
-        {
-            if (!ByteUtils.TryHexNibble(hex[src++], out var hiNib) ||
-                !ByteUtils.TryHexNibble(hex[src++], out var loNib))
-                return false;
+        //while (src < hex.Length)
+        //{
+        //    if (!ByteUtils.TryHexNibble(hex[src++], out var hiNib) ||
+        //        !ByteUtils.TryHexNibble(hex[src++], out var loNib))
+        //        return false;
 
-            tmp[dst++] = (byte)((hiNib << 4) | loNib);
-        }
+        //    tmp[dst++] = (byte)((hiNib << 4) | loNib);
+        //}
 
         // BigInteger expects little-endian; reverse
         tmp[..dst].Reverse();
