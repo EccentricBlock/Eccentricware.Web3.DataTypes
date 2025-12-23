@@ -27,147 +27,95 @@ public enum AddressType : byte
 }
 
 /// <summary>
-/// A blockchain address supporting both EVM (20 bytes) and Solana (32 bytes) formats.
-/// Uses a compact representation optimized for minimal memory footprint.
-/// Immutable, equatable, and comparable for use as dictionary keys and sorting.
+/// A compact blockchain address supporting both EVM (20 bytes) and Solana (32 bytes).
 /// </summary>
 /// <remarks>
-/// Memory layout: 40 bytes total (4 x ulong + 1 byte type, padded to 8-byte alignment).
-/// Uses natural alignment (Pack=8) for optimal CPU cache performance.
+/// <para>
+/// Storage layout is optimised for hot-path comparisons and dictionary keys:
+/// 32 bytes of data (4 x ulong) + 1 byte <see cref="AddressType"/> + 7 bytes padding = 40 bytes.
+/// </para>
+/// <para>
+/// For EVM addresses, only the first 20 bytes are used; the remaining 12 bytes are zero.
+/// The 32-byte backing value is stored in big-endian byte order across the four ulongs
+/// for stable lexicographic ordering and predictable formatting.
+/// </para>
 /// </remarks>
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Pack = 8)]
 [JsonConverter(typeof(AddressJsonConverter))]
-public readonly struct Address : 
-    IEquatable<Address>, 
-    IComparable<Address>, 
+public readonly struct Address :
+    IEquatable<Address>,
+    IComparable<Address>,
     IComparable,
     ISpanFormattable,
     ISpanParsable<Address>,
     IUtf8SpanFormattable
 {
-    /// <summary>
-    /// The size in bytes of an EVM address (20 bytes / 160 bits).
-    /// </summary>
+    /// <summary>The byte length of an EVM address payload.</summary>
     public const int EvmByteLength = 20;
 
-    /// <summary>
-    /// The size in bytes of a Solana address (32 bytes / 256 bits).
-    /// </summary>
+    /// <summary>The byte length of a Solana public key payload.</summary>
     public const int SolanaByteLength = 32;
 
-    /// <summary>
-    /// The size in characters of an EVM hex string without prefix.
-    /// </summary>
+    /// <summary>The number of hex characters in an EVM address without prefix (20 bytes * 2).</summary>
     public const int EvmHexLength = 40;
 
-    /// <summary>
-    /// The maximum size in characters of a Base58 encoded Solana address.
-    /// </summary>
+    /// <summary>The maximum number of Base58 characters for a 32-byte payload.</summary>
     public const int MaxBase58Length = 44;
 
-    // Store as 4 x ulong (big-endian layout: _u0 is most significant for lexicographic comparison)
-    // For EVM: only first 20 bytes used (2.5 ulongs), lower 32 bits of _u2 + _u3 = 0
-    // For Solana: all 32 bytes used
-    private readonly ulong _u0; // bytes 0-7 (most significant)
-    private readonly ulong _u1; // bytes 8-15
-    private readonly ulong _u2; // bytes 16-23
-    private readonly ulong _u3; // bytes 24-31 (least significant, unused for EVM)
+    // 32 bytes backing payload (big-endian):
+    // _u0 contains bytes 0..7 (most significant), _u3 contains bytes 24..31 (least significant).
+    private readonly ulong _u0;
+    private readonly ulong _u1;
+    private readonly ulong _u2;
+    private readonly ulong _u3;
+
     private readonly AddressType _type;
 
-    /// <summary>
-    /// The zero EVM address (all bytes are 0x00).
-    /// </summary>
-    public static readonly Address Zero;
+    // Explicit padding to lock the struct size at 40 bytes and keep layout stable for bulk matchers.
+    private readonly byte _pad0;
+    private readonly byte _pad1;
+    private readonly byte _pad2;
+    private readonly byte _pad3;
+    private readonly byte _pad4;
+    private readonly byte _pad5;
+    private readonly byte _pad6;
 
-    // Base58 alphabet (Bitcoin style, used by Solana)
-    private static ReadOnlySpan<byte> Base58Alphabet => 
-        "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"u8;
+    /// <summary>A zero EVM address (<c>0x000…000</c>).</summary>
+    public static readonly Address ZeroEvm = new(0, 0, 0, 0, AddressType.Evm);
 
-    // Lookup table for Base58 decoding (-1 = invalid)
-    private static ReadOnlySpan<sbyte> Base58DecodeMap =>
-    [
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1, 0, 1, 2, 3, 4, 5, 6, 7, 8,-1,-1,-1,-1,-1,-1,
-        -1, 9,10,11,12,13,14,15,16,-1,17,18,19,20,21,-1,
-        22,23,24,25,26,27,28,29,30,31,32,-1,-1,-1,-1,-1,
-        -1,33,34,35,36,37,38,39,40,41,42,43,-1,44,45,46,
-        47,48,49,50,51,52,53,54,55,56,57,-1,-1,-1,-1,-1
-    ];
-
-    // Hex lookup tables
-    private static ReadOnlySpan<byte> HexBytesLower => "0123456789abcdef"u8;
-    private static ReadOnlySpan<byte> HexBytesUpper => "0123456789ABCDEF"u8;
-
-    #region Constructors
+    /// <summary>A zero Solana address (32 zero bytes; Base58 would be 32 '1' characters).</summary>
+    public static readonly Address ZeroSolana = new(0, 0, 0, 0, AddressType.Solana);
 
     /// <summary>
-    /// Creates an Address from 4 ulong values in big-endian order with specified type.
+    /// Creates an address from 32 bytes represented by four 64-bit words in big-endian order.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private Address(ulong u0, ulong u1, ulong u2, ulong u3, AddressType type)
+    private Address(ulong u0Msb, ulong u1, ulong u2, ulong u3Lsb, AddressType addressType)
     {
-        _u0 = u0;
+        _u0 = u0Msb;
         _u1 = u1;
         _u2 = u2;
-        _u3 = u3;
-        _type = type;
+        _u3 = u3Lsb;
+        _type = addressType;
+
+        _pad0 = _pad1 = _pad2 = _pad3 = _pad4 = _pad5 = _pad6 = 0;
     }
 
-    /// <summary>
-    /// Creates an EVM address from a 20-byte big-endian span.
-    /// Allocation-free, reads bytes directly without intermediate buffer.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Address FromEvmBytes(ReadOnlySpan<byte> bytes)
-    {
-        if (bytes.Length != EvmByteLength)
-            ThrowHelper.ThrowArgumentExceptionInvalidEvmLength(nameof(bytes));
-
-        // Read 20 bytes directly: 8 + 8 + 4 bytes
-        ulong u0 = BinaryPrimitives.ReadUInt64BigEndian(bytes);
-        ulong u1 = BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(8));
-        // Last 4 bytes go into upper 32 bits of u2
-        ulong u2 = (ulong)BinaryPrimitives.ReadUInt32BigEndian(bytes.Slice(16)) << 32;
-        
-        return new Address(u0, u1, u2, 0, AddressType.Evm);
-    }
-
-    /// <summary>
-    /// Creates a Solana address from a 32-byte span.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Address FromSolanaBytes(ReadOnlySpan<byte> bytes)
-    {
-        if (bytes.Length != SolanaByteLength)
-            ThrowHelper.ThrowArgumentExceptionInvalidSolanaLength(nameof(bytes));
-
-        ulong u0 = BinaryPrimitives.ReadUInt64BigEndian(bytes);
-        ulong u1 = BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(8));
-        ulong u2 = BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(16));
-        ulong u3 = BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(24));
-        
-        return new Address(u0, u1, u2, u3, AddressType.Solana);
-    }
-
-    #endregion
-
-    #region Properties
-
-    /// <summary>
-    /// Gets the type of this address (EVM or Solana).
-    /// </summary>
+    /// <summary>Returns the address family.</summary>
     public AddressType Type
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => _type;
     }
 
-    /// <summary>
-    /// Returns true if this is the zero address.
-    /// Branchless implementation for CPU pipeline efficiency.
-    /// </summary>
+    /// <summary>Returns the wire byte length for the current address family (20 for EVM; 32 for Solana).</summary>
+    public int ByteLength
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _type == AddressType.Evm ? EvmByteLength : SolanaByteLength;
+    }
+
+    /// <summary>Returns true if the 32-byte backing value is all zeros (type is not considered).</summary>
     public bool IsZero
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -175,114 +123,98 @@ public readonly struct Address :
     }
 
     /// <summary>
-    /// Gets the byte length of this address (20 for EVM, 32 for Solana).
+    /// Creates an EVM address from a 20-byte big-endian payload.
     /// </summary>
-    public int ByteLength
+    public static Address FromEvmBytes(ReadOnlySpan<byte> evmAddress20)
     {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _type == AddressType.Evm ? EvmByteLength : SolanaByteLength;
+        if (evmAddress20.Length != EvmByteLength)
+            ThrowHelper.ThrowArgumentExceptionInvalidEvmLength(nameof(evmAddress20));
+
+        ulong u0 = BinaryPrimitives.ReadUInt64BigEndian(evmAddress20);
+        ulong u1 = BinaryPrimitives.ReadUInt64BigEndian(evmAddress20.Slice(8));
+        ulong u2 = (ulong)BinaryPrimitives.ReadUInt32BigEndian(evmAddress20.Slice(16)) << 32;
+
+        return new Address(u0, u1, u2, 0, AddressType.Evm);
     }
 
-    #endregion
+    /// <summary>
+    /// Creates a Solana address from a 32-byte payload.
+    /// </summary>
+    public static Address FromSolanaBytes(ReadOnlySpan<byte> solanaPubkey32)
+    {
+        if (solanaPubkey32.Length != SolanaByteLength)
+            ThrowHelper.ThrowArgumentExceptionInvalidSolanaLength(nameof(solanaPubkey32));
 
-    #region Byte Conversions
+        ulong u0 = BinaryPrimitives.ReadUInt64BigEndian(solanaPubkey32);
+        ulong u1 = BinaryPrimitives.ReadUInt64BigEndian(solanaPubkey32.Slice(8));
+        ulong u2 = BinaryPrimitives.ReadUInt64BigEndian(solanaPubkey32.Slice(16));
+        ulong u3 = BinaryPrimitives.ReadUInt64BigEndian(solanaPubkey32.Slice(24));
+
+        return new Address(u0, u1, u2, u3, AddressType.Solana);
+    }
 
     /// <summary>
-    /// Writes the address bytes in big-endian order.
-    /// For EVM: writes 20 bytes. For Solana: writes 32 bytes.
+    /// Writes the address bytes in big-endian order to <paramref name="destination"/>.
+    /// Writes 20 bytes for EVM and 32 bytes for Solana.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteBytes(Span<byte> destination)
     {
-        int length = ByteLength;
-        if (destination.Length < length)
+        int required = ByteLength;
+        if (destination.Length < required)
             ThrowHelper.ThrowArgumentExceptionDestinationTooSmall(nameof(destination));
+
+        BinaryPrimitives.WriteUInt64BigEndian(destination, _u0);
+        BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(8), _u1);
 
         if (_type == AddressType.Evm)
         {
-            // Write 20 bytes: 8 + 8 + 4
-            BinaryPrimitives.WriteUInt64BigEndian(destination, _u0);
-            BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(8), _u1);
             BinaryPrimitives.WriteUInt32BigEndian(destination.Slice(16), (uint)(_u2 >> 32));
+            return;
         }
-        else
-        {
-            // Write 32 bytes
-            BinaryPrimitives.WriteUInt64BigEndian(destination, _u0);
-            BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(8), _u1);
-            BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(16), _u2);
-            BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(24), _u3);
-        }
+
+        BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(16), _u2);
+        BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(24), _u3);
     }
 
     /// <summary>
-    /// Returns the address as a byte array.
+    /// Creates a new byte array containing the wire-format bytes for this address (20 or 32 bytes).
     /// </summary>
     public byte[] ToBytes()
     {
-        var bytes = new byte[ByteLength];
+        byte[] bytes = new byte[ByteLength];
         WriteBytes(bytes);
         return bytes;
     }
 
-    #endregion
-
-    #region Equality (SIMD Optimized)
-
     /// <summary>
-    /// Compares this address for equality with another.
-    /// Uses SIMD when available for maximum performance.
+    /// Compares this address to another for equality.
+    /// Scalar comparison is faster than SIMD for single-value compares.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(Address other)
-    {
-        if (_type != other._type)
-            return false;
+        => _type == other._type && _u0 == other._u0 && _u1 == other._u1 && _u2 == other._u2 && _u3 == other._u3;
 
-        // SIMD path for 256-bit comparison
-        if (Vector256.IsHardwareAccelerated)
-        {
-            var left = Vector256.Create(_u0, _u1, _u2, _u3);
-            var right = Vector256.Create(other._u0, other._u1, other._u2, other._u3);
-            return left.Equals(right);
-        }
-
-        // Fallback: scalar comparison
-        return _u0 == other._u0 && _u1 == other._u1 && _u2 == other._u2 && _u3 == other._u3;
-    }
-
+    /// <inheritdoc/>
     public override bool Equals(object? obj) => obj is Address other && Equals(other);
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override int GetHashCode()
-    {
-        // Use all components for good distribution
-        // For EVM, _u3 is always 0 but that's fine
-        return HashCode.Combine(_u0, _u1, _u2, _u3, _type);
-    }
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(_u0, _u1, _u2, _u3, (byte)_type);
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    /// <summary>Returns true if two addresses are equal.</summary>
     public static bool operator ==(Address left, Address right) => left.Equals(right);
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    /// <summary>Returns true if two addresses are not equal.</summary>
     public static bool operator !=(Address left, Address right) => !left.Equals(right);
-
-    #endregion
-
-    #region Comparison
 
     /// <summary>
     /// Lexicographic comparison. EVM addresses sort before Solana addresses.
-    /// Within same type, compares bytes from most significant to least.
+    /// Within the same family, compares backing bytes from most-significant to least-significant.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int CompareTo(Address other)
     {
-        // Compare by type first (EVM < Solana)
-        if (_type != other._type) 
+        if (_type != other._type)
             return _type < other._type ? -1 : 1;
-        
-        // Then lexicographic by bytes
+
         if (_u0 != other._u0) return _u0 < other._u0 ? -1 : 1;
         if (_u1 != other._u1) return _u1 < other._u1 ? -1 : 1;
         if (_u2 != other._u2) return _u2 < other._u2 ? -1 : 1;
@@ -290,942 +222,527 @@ public readonly struct Address :
         return 0;
     }
 
+    /// <inheritdoc/>
     public int CompareTo(object? obj)
     {
         if (obj is null) return 1;
         if (obj is Address other) return CompareTo(other);
-        throw new ArgumentException($"Object must be of type {nameof(Address)}", nameof(obj));
+        throw new ArgumentException($"Object must be of type {nameof(Address)}.", nameof(obj));
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    /// <summary>Returns true if <paramref name="left"/> is less than <paramref name="right"/>.</summary>
     public static bool operator <(Address left, Address right) => left.CompareTo(right) < 0;
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    /// <summary>Returns true if <paramref name="left"/> is greater than <paramref name="right"/>.</summary>
     public static bool operator >(Address left, Address right) => left.CompareTo(right) > 0;
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    /// <summary>Returns true if <paramref name="left"/> is less than or equal to <paramref name="right"/>.</summary>
     public static bool operator <=(Address left, Address right) => left.CompareTo(right) <= 0;
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    /// <summary>Returns true if <paramref name="left"/> is greater than or equal to <paramref name="right"/>.</summary>
     public static bool operator >=(Address left, Address right) => left.CompareTo(right) >= 0;
 
-    #endregion
-
-    #region Parsing
+    // -------------------------
+    // Parsing (chars and UTF-8)
+    // -------------------------
 
     /// <summary>
-    /// Parses an address string. Automatically detects EVM (0x prefix) or Solana (Base58).
+    /// Parses an address from characters, auto-detecting EVM vs Solana.
+    /// Detection order:
+    /// <list type="number">
+    /// <item><description><c>0x</c>/<c>0X</c> prefix => EVM</description></item>
+    /// <item><description>Otherwise, try canonical Base58=>32 => Solana</description></item>
+    /// <item><description>Otherwise, if length is 40 and all hex => EVM</description></item>
+    /// </list>
     /// </summary>
-    public static Address Parse(ReadOnlySpan<char> s)
+    public static Address Parse(ReadOnlySpan<char> text)
     {
-        if (s.Length == 0)
-            ThrowHelper.ThrowFormatExceptionEmpty();
-
-        // EVM addresses start with 0x
-        if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-            return ParseEvm(s);
-
-        // Otherwise try Base58 (Solana)
-        return ParseSolana(s);
+        if (!TryParse(text, out Address value))
+            ThrowHelper.ThrowFormatExceptionInvalidAddress();
+        return value;
     }
 
     /// <summary>
-    /// Parses an EVM address (40 hex characters with optional 0x prefix).
-    /// Uses direct nibble parsing for maximum performance.
+    /// Parses an address from a string using invariant parsing rules.
     /// </summary>
-    public static Address ParseEvm(ReadOnlySpan<char> hex)
-    {
-        if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-            hex = hex.Slice(2);
-
-        if (hex.Length != EvmHexLength)
-            ThrowHelper.ThrowFormatExceptionInvalidEvmHexLength();
-
-        // Parse directly into ulongs without intermediate byte array
-        ulong u0 = ParseHexUInt64(hex.Slice(0, 16));
-        ulong u1 = ParseHexUInt64(hex.Slice(16, 16));
-        // Last 8 hex chars = 4 bytes, goes into upper 32 bits of u2
-        ulong u2 = ParseHexUInt32(hex.Slice(32, 8));
-        u2 <<= 32;
-
-        return new Address(u0, u1, u2, 0, AddressType.Evm);
-    }
+    public static Address Parse(string text) => Parse(text.AsSpan());
 
     /// <summary>
-    /// Parses a Solana address (Base58 encoded, typically 32-44 characters).
-    /// Allocation-free implementation using fixed-size arithmetic.
+    /// Tries to parse an address from characters without throwing.
     /// </summary>
-    public static Address ParseSolana(ReadOnlySpan<char> base58)
+    public static bool TryParse(ReadOnlySpan<char> text, out Address value)
     {
-        if (base58.Length == 0 || base58.Length > MaxBase58Length)
-            ThrowHelper.ThrowFormatExceptionInvalidBase58Length();
+        Unsafe.SkipInit(out value);
 
-        if (!TryDecodeBase58(base58, out ulong u0, out ulong u1, out ulong u2, out ulong u3))
-            ThrowHelper.ThrowFormatExceptionInvalidBase58();
+        if (text.IsEmpty)
+            goto Fail;
 
-        return new Address(u0, u1, u2, u3, AddressType.Solana);
-    }
-
-    public static Address Parse(string s) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
-
-    public static Address Parse(ReadOnlySpan<char> s, IFormatProvider? provider)
-    {
-        if (TryParse(s, provider, out var result))
+        // EVM: 0x + 40 hex
+        if (text.Length == 42 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X'))
         {
-            return result;
+            if (TryParseEvmHexChars(text.Slice(2), out value))
+                return true;
+            goto Fail;
         }
 
-        throw new FormatException("Invalid hexadecimal string");
+        // Solana: attempt canonical Base58->32 if in plausible length range (includes the ambiguous 40-char case).
+        if ((uint)(text.Length - 32) <= (MaxBase58Length - 32))
+        {
+            if (TryParseSolanaBase58Chars(text, out value))
+                return true;
+        }
+
+        // EVM: 40 hex without prefix (fallback only, to avoid misclassifying Base58-like inputs).
+        if (text.Length == EvmHexLength && ByteUtils.IsAllHexChars(text))
+        {
+            if (TryParseEvmHexChars(text, out value))
+                return true;
+        }
+
+    Fail:
+        value = default;
+        return false;
     }
 
-    public static Address Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), provider);
+    /// <summary>
+    /// Tries to parse an address from a nullable string.
+    /// </summary>
+    public static bool TryParse([NotNullWhen(true)] string? text, out Address value)
+    {
+        if (text is null)
+        {
+            value = default;
+            return false;
+        }
 
+        return TryParse(text.AsSpan(), out value);
+    }
+
+    /// <summary>
+    /// Parses an address from UTF-8 bytes (optionally surrounded by JSON quotes).
+    /// </summary>
     public static Address Parse(ReadOnlySpan<byte> utf8)
     {
-        if (!TryParse(utf8, out var result))
+        if (!TryParse(utf8, out Address value))
             ThrowHelper.ThrowFormatExceptionInvalidAddress();
-        return result;
+        return value;
     }
 
     /// <summary>
-    /// Tries to parse an address string without exceptions.
+    /// Tries to parse an address from UTF-8 bytes (optionally surrounded by JSON quotes) without allocations.
     /// </summary>
-    public static bool TryParse(ReadOnlySpan<char> s, out Address result)
+    public static bool TryParse(ReadOnlySpan<byte> utf8, out Address value)
     {
-        result = Zero;
+        Unsafe.SkipInit(out value);
 
-        if (s.Length == 0)
-            return false;
+        if (!ByteUtils.TryUnquoteJsonUtf8(utf8, out ReadOnlySpan<byte> unquoted))
+            goto Fail;
 
-        // EVM addresses start with 0x
-        if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-            return TryParseEvm(s, out result);
-
-        // Otherwise try Base58 (Solana)
-        return TryParseSolana(s, out result);
-    }
-
-    /// <summary>
-    /// Tries to parse an EVM address without exceptions.
-    /// </summary>
-    public static bool TryParseEvm(ReadOnlySpan<char> hex, out Address result)
-    {
-        result = Zero;
-
-        if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-            hex = hex.Slice(2);
-
-        if (hex.Length != EvmHexLength)
-            return false;
-
-        if (!TryParseHexUInt64(hex.Slice(0, 16), out ulong u0))
-            return false;
-        if (!TryParseHexUInt64(hex.Slice(16, 16), out ulong u1))
-            return false;
-        if (!TryParseHexUInt32(hex.Slice(32, 8), out uint u2Upper))
-            return false;
-
-        result = new Address(u0, u1, (ulong)u2Upper << 32, 0, AddressType.Evm);
-        return true;
-    }
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TryParseEvmUtf8(ReadOnlySpan<byte> utf8, out Address result)
-    {
-        result = Zero;
-
-        // Skip 0x
-        utf8 = utf8.Slice(2);
-
-        if (utf8.Length != EvmHexLength)
-            return false;
-
-        ulong u0 = 0, u1 = 0;
-        uint u2Upper = 0;
-
-        // First 16 hex chars → u0
-        for (int i = 0; i < 16; i++)
+        // EVM: 0x + 40 hex
+        if (unquoted.Length == 42 &&
+            unquoted[0] == (byte)'0' &&
+            ((unquoted[1] | 0x20) == (byte)'x'))
         {
-            int n = ByteUtils.ParseHexNibbleUtf8(utf8[i]);
-            if (n < 0) return false;
-            u0 = (u0 << 4) | (uint)n;
+            if (TryParseEvmHexUtf8(unquoted.Slice(2), out value))
+                return true;
+            goto Fail;
         }
 
-        // Next 16 hex chars → u1
-        for (int i = 16; i < 32; i++)
+        // Solana: attempt canonical Base58->32 in plausible length range.
+        if ((uint)(unquoted.Length - 32) <= (MaxBase58Length - 32))
         {
-            int n = ByteUtils.ParseHexNibbleUtf8(utf8[i]);
-            if (n < 0) return false;
-            u1 = (u1 << 4) | (uint)n;
+            if (TryParseSolanaBase58Utf8(unquoted, out value))
+                return true;
         }
 
-        // Last 8 hex chars → upper 32 bits of u2
-        for (int i = 32; i < 40; i++)
+        // EVM: 40 hex without prefix.
+        if (unquoted.Length == EvmHexLength && ByteUtils.IsAllHexUtf8(unquoted))
         {
-            int n = ByteUtils.ParseHexNibbleUtf8(utf8[i]);
-            if (n < 0) return false;
-            u2Upper = (u2Upper << 4) | (uint)n;
+            if (TryParseEvmHexUtf8(unquoted, out value))
+                return true;
         }
 
-        result = new Address(u0, u1, (ulong)u2Upper << 32, 0, AddressType.Evm);
-        return true;
+    Fail:
+        value = default;
+        return false;
     }
 
-    /// <summary>
-    /// Tries to parse a Solana address without exceptions.
-    /// </summary>
-    public static bool TryParseSolana(ReadOnlySpan<char> base58, out Address result)
+    /// <summary>ISpanParsable required method; the format provider is ignored.</summary>
+    public static Address Parse(ReadOnlySpan<char> s, IFormatProvider? provider) => Parse(s);
+
+    /// <summary>ISpanParsable required method; the format provider is ignored.</summary>
+    public static bool TryParse(ReadOnlySpan<char> s, IFormatProvider? provider, out Address result) => TryParse(s, out result);
+
+    /// <summary>ISpanParsable required method; the format provider is ignored.</summary>
+    public static Address Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), provider);
+
+    /// <summary>ISpanParsable required method; the format provider is ignored.</summary>
+    public static bool TryParse([NotNullWhen(true)] string? s, IFormatProvider? provider, out Address result)
     {
-        result = Zero;
-
-        if (base58.Length == 0 || base58.Length > MaxBase58Length)
-            return false;
-
-        if (!TryDecodeBase58(base58, out ulong u0, out ulong u1, out ulong u2, out ulong u3))
-            return false;
-
-        result = new Address(u0, u1, u2, u3, AddressType.Solana);
-        return true;
-    }
-
-    public static bool TryParse(string? s, out Address result)
-    {
-        if (string.IsNullOrEmpty(s))
+        if (s is null)
         {
-            result = Zero;
+            result = default;
             return false;
         }
+
         return TryParse(s.AsSpan(), out result);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool TryParseSolanaUtf8(ReadOnlySpan<byte> utf8, out Address result)
+    private static bool TryParseEvmHexChars(ReadOnlySpan<char> hex40, out Address value)
     {
-        result = Zero;
+        Unsafe.SkipInit(out value);
 
-        if (utf8.Length == 0 || utf8.Length > MaxBase58Length)
+        if (hex40.Length != EvmHexLength)
             return false;
 
-        ulong u0 = 0, u1 = 0, u2 = 0, u3 = 0;
+        if (!ByteUtils.TryParseHexUInt64CharsFixed16(hex40.Slice(0, 16), out ulong u0)) return false;
+        if (!ByteUtils.TryParseHexUInt64CharsFixed16(hex40.Slice(16, 16), out ulong u1)) return false;
+        if (!ByteUtils.TryParseHexUInt32CharsFixed8(hex40.Slice(32, 8), out uint u2Upper)) return false;
 
-        // Count leading '1's (leading zero bytes)
-        int i = 0;
-        while (i < utf8.Length && utf8[i] == (byte)'1')
-            i++;
-
-        for (; i < utf8.Length; i++)
-        {
-            byte b = utf8[i];
-            if (b >= 128)
-                return false;
-
-            int digit = Base58DecodeMap[b];
-            if (digit < 0)
-                return false;
-
-            if (!MulAdd58(ref u0, ref u1, ref u2, ref u3, (ulong)digit))
-                return false;
-        }
-
-        result = new Address(u0, u1, u2, u3, AddressType.Solana);
-        return true;
-    }
-    /// <summary>
-    /// Tries to parse an address from UTF-8 JSON-RPC data without allocations.
-    /// Accepts quoted or unquoted strings.
-    /// </summary>
-    public static bool TryParse(ReadOnlySpan<byte> utf8, out Address result)
-    {
-        result = Zero;
-
-        if (utf8.Length == 0)
-            return false;
-
-        // Trim surrounding quotes if present
-        if (utf8.Length >= 2 && utf8[0] == (byte)'"' && utf8[^1] == (byte)'"')
-            utf8 = utf8.Slice(1, utf8.Length - 2);
-
-        if (utf8.Length == 0)
-            return false;
-
-        // EVM: starts with 0x / 0X
-        if (utf8.Length >= 2 && utf8[0] == (byte)'0' && (utf8[1] | 0x20) == (byte)'x')
-            return TryParseEvmUtf8(utf8, out result);
-
-        // Otherwise assume Base58 (Solana)
-        return TryParseSolanaUtf8(utf8, out result);
-    }
-    public static bool TryParse(ReadOnlySpan<char> s, IFormatProvider? provider, out Address result)
-        => TryParse(s, out result);
-
-    public static bool TryParse([NotNullWhen(true)] string? s, IFormatProvider? provider, out Address result)
-        => TryParse(s, out result);
-
-    #region Hex Parsing Helpers
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ulong ParseHexUInt64(ReadOnlySpan<char> hex)
-    {
-        ulong result = 0;
-        for (int i = 0; i < 16; i++)
-        {
-            int nibble = ByteUtils.ParseHexNibble(hex[i]);
-            if (nibble < 0) ThrowHelper.ThrowFormatExceptionInvalidHex();
-            result = (result << 4) | (uint)nibble;
-        }
-        return result;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TryParseHexUInt64(ReadOnlySpan<char> hex, out ulong result)
-    {
-        result = 0;
-        for (int i = 0; i < 16; i++)
-        {
-            int nibble = ByteUtils.ParseHexNibble(hex[i]);
-            if (nibble < 0) return false;
-            result = (result << 4) | (uint)nibble;
-        }
+        value = new Address(u0, u1, (ulong)u2Upper << 32, 0, AddressType.Evm);
         return true;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static uint ParseHexUInt32(ReadOnlySpan<char> hex)
+    private static bool TryParseEvmHexUtf8(ReadOnlySpan<byte> hex40Utf8, out Address value)
     {
-        uint result = 0;
-        for (int i = 0; i < 8; i++)
-        {
-            int nibble = ByteUtils.ParseHexNibble(hex[i]);
-            if (nibble < 0) ThrowHelper.ThrowFormatExceptionInvalidHex();
-            result = (result << 4) | (uint)nibble;
-        }
-        return result;
-    }
+        Unsafe.SkipInit(out value);
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TryParseHexUInt32(ReadOnlySpan<char> hex, out uint result)
-    {
-        result = 0;
-        for (int i = 0; i < 8; i++)
-        {
-            int nibble = ByteUtils.ParseHexNibble(hex[i]);
-            if (nibble < 0) return false;
-            result = (result << 4) | (uint)nibble;
-        }
+        if (hex40Utf8.Length != EvmHexLength)
+            return false;
+
+        if (!ByteUtils.TryParseHexUInt64Utf8Fixed16(hex40Utf8.Slice(0, 16), out ulong u0)) return false;
+        if (!ByteUtils.TryParseHexUInt64Utf8Fixed16(hex40Utf8.Slice(16, 16), out ulong u1)) return false;
+        if (!ByteUtils.TryParseHexUInt32Utf8Fixed8(hex40Utf8.Slice(32, 8), out uint u2Upper)) return false;
+
+        value = new Address(u0, u1, (ulong)u2Upper << 32, 0, AddressType.Evm);
         return true;
     }
 
-    #endregion
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool TryParseSolanaBase58Utf8(ReadOnlySpan<byte> base58Utf8, out Address value)
+    {
+        Unsafe.SkipInit(out value);
 
-    #endregion
+        if (!ByteUtils.TryDecodeBase58ToUInt256BigEndian(base58Utf8, out ulong u0, out ulong u1, out ulong u2, out ulong u3))
+            return false;
 
-    #region Formatting
+        value = new Address(u0, u1, u2, u3, AddressType.Solana);
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool TryParseSolanaBase58Chars(ReadOnlySpan<char> base58Chars, out Address value)
+    {
+        Unsafe.SkipInit(out value);
+
+        // Convert to ASCII bytes on stack; reject non-ASCII early.
+        Span<byte> tmp = stackalloc byte[MaxBase58Length];
+        for (int i = 0; i < base58Chars.Length; i++)
+        {
+            char c = base58Chars[i];
+            if (c > 0x7F) // Base58 alphabet is ASCII
+                return false;
+            tmp[i] = (byte)c;
+        }
+
+        return TryParseSolanaBase58Utf8(tmp.Slice(0, base58Chars.Length), out value);
+    }
+
+    // -------------------------
+    // Formatting
+    // -------------------------
 
     /// <summary>
-    /// Returns the string representation.
-    /// EVM: lowercase hex with 0x prefix. Solana: Base58.
+    /// Returns the canonical string representation:
+    /// EVM as lowercase <c>0x</c>-prefixed hex; Solana as Base58.
     /// </summary>
     public override string ToString()
     {
-        if (_type == AddressType.Evm)
-        {
-            return string.Create(EvmHexLength + 2, this, static (chars, addr) =>
-            {
-                chars[0] = '0';
-                chars[1] = 'x';
-                addr.FormatEvmHexCore(chars.Slice(2), uppercase: false);
-            });
-        }
-        else
-        {
-            Span<char> buffer = stackalloc char[MaxBase58Length];
-            int length = EncodeBase58(buffer);
-            return new string(buffer.Slice(0, length));
-        }
+        Span<char> buffer = stackalloc char[MaxBase58Length];
+
+        if (!TryFormat(buffer, out int written, format: default, provider: null))
+            return _type == AddressType.Evm ? "0x" + new string('0', EvmHexLength) : string.Empty;
+
+        return new string(buffer.Slice(0, written));
     }
 
     /// <summary>
-    /// Formats the value according to the format string.
-    /// EVM: "x" lowercase, "X" uppercase, "0x" with prefix (default), "0X" uppercase with prefix, "C"/"c" checksum.
-    /// Solana: Base58 (format ignored).
+    /// Formats the address.
+    /// <list type="bullet">
+    /// <item><description>EVM supports: <c>"0x"</c>, <c>"0X"</c>, <c>"x"</c>, <c>"X"</c>, <c>"c"</c>/<c>"C"</c> (EIP-55 checksum).</description></item>
+    /// <item><description>Solana ignores the format and returns Base58.</description></item>
+    /// </list>
     /// </summary>
-    public string ToString(string? format, IFormatProvider? formatProvider = null)
+    public string ToString(string? format, IFormatProvider? formatProvider)
     {
-        if (_type == AddressType.Solana)
-            return ToString(); // Base58, format ignored
+        Span<char> buffer = stackalloc char[MaxBase58Length];
 
-        format ??= "0x";
+        ReadOnlySpan<char> f = format is null ? default : format.AsSpan();
+        if (!TryFormat(buffer, out int written, f, formatProvider))
+            throw new FormatException(nameof(format));
 
-        return format switch
-        {
-            "0x" => ToString(),
-            "0X" => string.Create(EvmHexLength + 2, this, static (chars, addr) =>
-            {
-                chars[0] = '0';
-                chars[1] = 'x';
-                addr.FormatEvmHexCore(chars.Slice(2), uppercase: true);
-            }),
-            "x" => string.Create(EvmHexLength, this, static (chars, addr) =>
-            {
-                addr.FormatEvmHexCore(chars, uppercase: false);
-            }),
-            "X" => string.Create(EvmHexLength, this, static (chars, addr) =>
-            {
-                addr.FormatEvmHexCore(chars, uppercase: true);
-            }),
-            "C" or "c" => ToChecksumString(), // EIP-55 checksum
-            _ => throw new FormatException($"Unknown format: {format}")
-        };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void FormatEvmHexCore(Span<char> destination, bool uppercase)
-    {
-        var hexTable = uppercase ? HexBytesUpper : HexBytesLower;
-        
-        // Format _u0 (8 bytes = 16 hex chars)
-        FormatUInt64Hex(_u0, destination, hexTable);
-        // Format _u1 (8 bytes = 16 hex chars)
-        FormatUInt64Hex(_u1, destination.Slice(16), hexTable);
-        // Format upper 4 bytes of _u2 (4 bytes = 8 hex chars)
-        FormatUInt32Hex((uint)(_u2 >> 32), destination.Slice(32), hexTable);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void FormatUInt64Hex(ulong value, Span<char> destination, ReadOnlySpan<byte> hexTable)
-    {
-        for (int i = 15; i >= 0; i--)
-        {
-            destination[i] = (char)hexTable[(int)(value & 0xF)];
-            value >>= 4;
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void FormatUInt32Hex(uint value, Span<char> destination, ReadOnlySpan<byte> hexTable)
-    {
-        for (int i = 7; i >= 0; i--)
-        {
-            destination[i] = (char)hexTable[(int)(value & 0xF)];
-            value >>= 4;
-        }
+        return new string(buffer.Slice(0, written));
     }
 
     /// <summary>
-    /// Returns EVM address with EIP-55 mixed-case checksum encoding.
-    /// Uses Keccak256 hash of the lowercase address to determine case.
-    /// </summary>
-    public string ToChecksumString()
-    {
-        if (_type != AddressType.Evm)
-            throw new InvalidOperationException("Checksum encoding only applies to EVM addresses");
-
-        // Get lowercase hex without prefix
-        Span<char> hex = stackalloc char[EvmHexLength];
-        FormatEvmHexCore(hex, uppercase: false);
-
-        // Compute Keccak256 hash of the lowercase hex (as ASCII bytes)
-        Span<byte> hexBytes = stackalloc byte[EvmHexLength];
-        for (int i = 0; i < EvmHexLength; i++)
-            hexBytes[i] = (byte)hex[i];
-
-        Span<byte> hash = stackalloc byte[32];
-        Keccak256.ComputeHash(hexBytes, hash);
-
-        // Apply checksum: uppercase if corresponding hash nibble >= 8
-        for (int i = 0; i < EvmHexLength; i++)
-        {
-            char c = hex[i];
-            if (c >= 'a' && c <= 'f')
-            {
-                // Get corresponding nibble from hash
-                int hashByte = hash[i / 2];
-                int hashNibble = (i % 2 == 0) ? (hashByte >> 4) : (hashByte & 0xF);
-                
-                if (hashNibble >= 8)
-                    hex[i] = (char)(c - 32); // Convert to uppercase
-            }
-        }
-
-        return "0x" + new string(hex);
-    }
-
-    /// <summary>
-    /// Tries to format the value into the destination span.
+    /// Tries to format the address into <paramref name="destination"/>.
     /// </summary>
     public bool TryFormat(Span<char> destination, out int charsWritten, ReadOnlySpan<char> format = default, IFormatProvider? provider = null)
     {
         if (_type == AddressType.Solana)
         {
-            // Base58 encoding
-            if (destination.Length < MaxBase58Length)
+            // Base58 UTF-8 -> chars (ASCII copy)
+            Span<byte> tmp = stackalloc byte[MaxBase58Length];
+            int len = ByteUtils.EncodeBase58UInt256BigEndianToUtf8(_u0, _u1, _u2, _u3, tmp);
+            if ((uint)len > (uint)destination.Length)
             {
-                // Try anyway, might fit
-                Span<char> buffer = stackalloc char[MaxBase58Length];
-                int length = EncodeBase58(buffer);
-                if (length > destination.Length)
-                {
-                    charsWritten = 0;
-                    return false;
-                }
-                buffer.Slice(0, length).CopyTo(destination);
-                charsWritten = length;
-                return true;
+                charsWritten = 0;
+                return false;
             }
-            charsWritten = EncodeBase58(destination);
+
+            for (int i = 0; i < len; i++)
+                destination[i] = (char)tmp[i];
+
+            charsWritten = len;
             return true;
         }
 
-        // EVM formatting
-        bool hasPrefix = format.Length == 0 || format.SequenceEqual("0x") || format.SequenceEqual("0X") || 
-                         format.SequenceEqual("C") || format.SequenceEqual("c");
-        bool uppercase = format.SequenceEqual("X") || format.SequenceEqual("0X");
-        int requiredLength = hasPrefix ? EvmHexLength + 2 : EvmHexLength;
-
-        if (destination.Length < requiredLength)
+        if (!TryGetEvmFormat(format, out EvmFormat evmFormat))
         {
             charsWritten = 0;
             return false;
         }
 
-        if (hasPrefix)
+        if (evmFormat.Kind == EvmFormatKind.Checksum)
         {
-            destination[0] = '0';
-            destination[1] = 'x';
-            FormatEvmHexCore(destination.Slice(2), uppercase);
-        }
-        else
-        {
-            FormatEvmHexCore(destination, uppercase);
+            return TryFormatEvmChecksumChars(destination, out charsWritten);
         }
 
-        charsWritten = requiredLength;
+        int required = evmFormat.WithPrefix ? (EvmHexLength + 2) : EvmHexLength;
+        if (destination.Length < required)
+        {
+            charsWritten = 0;
+            return false;
+        }
+
+        int offset = 0;
+        if (evmFormat.WithPrefix)
+        {
+            destination[0] = '0';
+            destination[1] = evmFormat.PrefixUppercase ? 'X' : 'x';
+            offset = 2;
+        }
+
+        WriteEvmHexChars(destination.Slice(offset), evmFormat.HexUppercase);
+        charsWritten = required;
         return true;
     }
 
     /// <summary>
-    /// Tries to format the value into a UTF-8 destination span.
-    /// Optimized to write directly to UTF-8 without intermediate char buffer.
+    /// Tries to format the address into UTF-8 bytes without allocations.
     /// </summary>
     public bool TryFormat(Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format = default, IFormatProvider? provider = null)
     {
         if (_type == AddressType.Solana)
         {
-            // Base58 - encode to chars then convert (all ASCII)
-            Span<char> buffer = stackalloc char[MaxBase58Length];
-            int length = EncodeBase58(buffer);
-            
-            if (length > utf8Destination.Length)
+            int len = ByteUtils.EncodeBase58UInt256BigEndianToUtf8(_u0, _u1, _u2, _u3, utf8Destination);
+            if (len < 0)
             {
                 bytesWritten = 0;
                 return false;
             }
 
-            for (int i = 0; i < length; i++)
-                utf8Destination[i] = (byte)buffer[i];
-            
-            bytesWritten = length;
+            bytesWritten = len;
             return true;
         }
 
-        // EVM: format directly to UTF-8
-        bool hasPrefix = format.Length == 0 || format.SequenceEqual("0x") || format.SequenceEqual("0X");
-        bool uppercase = format.SequenceEqual("X") || format.SequenceEqual("0X");
-        int requiredLength = hasPrefix ? EvmHexLength + 2 : EvmHexLength;
-
-        if (utf8Destination.Length < requiredLength)
+        if (!TryGetEvmFormat(format, out EvmFormat evmFormat))
         {
             bytesWritten = 0;
             return false;
         }
 
-        if (hasPrefix)
+        if (evmFormat.Kind == EvmFormatKind.Checksum)
+        {
+            return TryFormatEvmChecksumUtf8(utf8Destination, out bytesWritten);
+        }
+
+        int required = evmFormat.WithPrefix ? (EvmHexLength + 2) : EvmHexLength;
+        if (utf8Destination.Length < required)
+        {
+            bytesWritten = 0;
+            return false;
+        }
+
+        int offset = 0;
+        if (evmFormat.WithPrefix)
         {
             utf8Destination[0] = (byte)'0';
-            utf8Destination[1] = (byte)'x';
-            FormatEvmHexCoreUtf8(utf8Destination.Slice(2), uppercase);
-        }
-        else
-        {
-            FormatEvmHexCoreUtf8(utf8Destination, uppercase);
+            utf8Destination[1] = evmFormat.PrefixUppercase ? (byte)'X' : (byte)'x';
+            offset = 2;
         }
 
-        bytesWritten = requiredLength;
+        WriteEvmHexUtf8(utf8Destination.Slice(offset), evmFormat.HexUppercase);
+        bytesWritten = required;
         return true;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void FormatEvmHexCoreUtf8(Span<byte> destination, bool uppercase)
-    {
-        var hexTable = uppercase ? HexBytesUpper : HexBytesLower;
-        
-        FormatUInt64HexUtf8(_u0, destination, hexTable);
-        FormatUInt64HexUtf8(_u1, destination.Slice(16), hexTable);
-        FormatUInt32HexUtf8((uint)(_u2 >> 32), destination.Slice(32), hexTable);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void FormatUInt64HexUtf8(ulong value, Span<byte> destination, ReadOnlySpan<byte> hexTable)
-    {
-        for (int i = 15; i >= 0; i--)
-        {
-            destination[i] = hexTable[(int)(value & 0xF)];
-            value >>= 4;
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void FormatUInt32HexUtf8(uint value, Span<byte> destination, ReadOnlySpan<byte> hexTable)
-    {
-        for (int i = 7; i >= 0; i--)
-        {
-            destination[i] = hexTable[(int)(value & 0xF)];
-            value >>= 4;
-        }
-    }
-
-    #endregion
-
-    #region Base58 Encoding/Decoding (Allocation-Free)
-
     /// <summary>
-    /// Encodes the Solana address bytes as Base58.
-    /// Uses direct 256-bit arithmetic without BigInteger allocation.
-    /// Returns the number of characters written.
+    /// Returns the EVM address using EIP-55 checksum encoding (mixed-case) with a lowercase <c>0x</c> prefix.
     /// </summary>
-    private int EncodeBase58(Span<char> destination)
+    public string ToChecksumString()
     {
-        // Count leading zeros (leading '1's in Base58)
-        int leadingZeros = CountLeadingZeroBytes();
+        if (_type != AddressType.Evm)
+            throw new InvalidOperationException("Checksum encoding only applies to EVM addresses.");
 
-        if (IsZero)
-        {
-            // All zeros = all '1's
-            for (int i = 0; i < SolanaByteLength; i++)
-                destination[i] = '1';
-            return SolanaByteLength;
-        }
+        Span<char> buffer = stackalloc char[EvmHexLength + 2];
+        if (!TryFormatEvmChecksumChars(buffer, out int written) || written != EvmHexLength + 2)
+            ThrowHelper.ThrowFormatExceptionInvalidAddress();
 
-        // Work with a mutable copy of the value as 4 ulongs
-        ulong v0 = _u0, v1 = _u1, v2 = _u2, v3 = _u3;
-        
-        // Output buffer (filled right to left)
-        Span<byte> output = stackalloc byte[MaxBase58Length];
-        int outputLen = 0;
-
-        // Divide by 58 repeatedly using 256-bit division
-        while (!IsZero256(v0, v1, v2, v3))
-        {
-            // Divide 256-bit value by 58, get remainder
-            ulong remainder = DivMod58(ref v0, ref v1, ref v2, ref v3);
-            output[outputLen++] = Base58Alphabet[(int)remainder];
-        }
-
-        // Add leading '1's for leading zero bytes
-        int totalLen = leadingZeros + outputLen;
-
-        // Write leading '1's
-        for (int i = 0; i < leadingZeros; i++)
-            destination[i] = '1';
-
-        // Write reversed output
-        for (int i = 0; i < outputLen; i++)
-            destination[leadingZeros + i] = (char)output[outputLen - 1 - i];
-
-        return totalLen;
+        return new string(buffer);
     }
 
-    /// <summary>
-    /// Decodes a Base58 string directly to 4 ulongs.
-    /// Allocation-free implementation.
-    /// </summary>
-    private static bool TryDecodeBase58(ReadOnlySpan<char> base58, out ulong u0, out ulong u1, out ulong u2, out ulong u3)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void WriteEvmHexChars(Span<char> hex40, bool uppercase)
     {
-        u0 = u1 = u2 = u3 = 0;
+        // _u0 (16 hex) + _u1 (16 hex) + upper 32 bits of _u2 (8 hex)
+        ByteUtils.WriteHexUInt64CharsFixed16(hex40.Slice(0, 16), _u0, uppercase);
+        ByteUtils.WriteHexUInt64CharsFixed16(hex40.Slice(16, 16), _u1, uppercase);
+        ByteUtils.WriteHexUInt32CharsFixed8(hex40.Slice(32, 8), (uint)(_u2 >> 32), uppercase);
+    }
 
-        if (base58.Length == 0)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void WriteEvmHexUtf8(Span<byte> hex40Utf8, bool uppercase)
+    {
+        ReadOnlySpan<byte> alphabet = uppercase ? ByteUtils.HexBytesUpper : ByteUtils.HexBytesLower;
+
+        ByteUtils.WriteHexUInt64Utf8Fixed16(hex40Utf8.Slice(0, 16), _u0, alphabet);
+        ByteUtils.WriteHexUInt64Utf8Fixed16(hex40Utf8.Slice(16, 16), _u1, alphabet);
+        ByteUtils.WriteHexUInt32Utf8Fixed8(hex40Utf8.Slice(32, 8), (uint)(_u2 >> 32), uppercase);
+    }
+
+    private bool TryFormatEvmChecksumChars(Span<char> destination, out int charsWritten)
+    {
+        // Always "0x" + 40 = 42.
+        const int required = EvmHexLength + 2;
+        if (destination.Length < required)
+        {
+            charsWritten = 0;
             return false;
-
-        // Count leading '1's (represent leading zero bytes)
-        int leadingOnes = 0;
-        while (leadingOnes < base58.Length && base58[leadingOnes] == '1')
-            leadingOnes++;
-
-        // Decode remaining characters using 256-bit multiplication
-        for (int i = leadingOnes; i < base58.Length; i++)
-        {
-            char c = base58[i];
-            if (c >= 128)
-                return false;
-            
-            int digit = Base58DecodeMap[c];
-            if (digit < 0)
-                return false;
-
-            // Multiply current value by 58 and add digit
-            if (!MulAdd58(ref u0, ref u1, ref u2, ref u3, (ulong)digit))
-                return false; // Overflow
         }
 
-        // Verify we have exactly 32 bytes worth of data
-        // The leading zeros from '1's should account for leading zero bytes
-        // For Solana, we expect exactly 32 bytes
+        destination[0] = '0';
+        destination[1] = 'x';
+
+        Span<char> hexLower = destination.Slice(2, EvmHexLength);
+        WriteEvmHexChars(hexLower, uppercase: false);
+
+        // Hash lowercase hex ASCII.
+        Span<byte> asciiHex = stackalloc byte[EvmHexLength];
+        for (int i = 0; i < EvmHexLength; i++)
+            asciiHex[i] = (byte)hexLower[i];
+
+        Span<byte> hash32 = stackalloc byte[32];
+        Keccak256.ComputeHash(asciiHex, hash32);
+
+        // Apply EIP-55 case rules.
+        // Convert keccak hash bytes into lowercase hex ascii to avoid byte/nibble ordering ambiguity,
+        // then use hex char >= '8' to decide uppercase for corresponding address hex digit.
+        Span<char> hashHex = stackalloc char[64]; // 32 bytes -> 64 hex chars
+        for (int j = 0; j < 32; j++)
+        {
+            byte hb = hash32[j];
+            int hi = hb >> 4;
+            int lo = hb & 0x0F;
+            hashHex[j * 2] = (char)(hi < 10 ? ('0' + hi) : ('a' + (hi - 10)));
+            hashHex[j * 2 + 1] = (char)(lo < 10 ? ('0' + lo) : ('a' + (lo - 10)));
+        }
+
+        for (int i = 0; i < EvmHexLength; i++)
+        {
+            char c = hexLower[i];
+            if ((uint)(c - 'a') <= 5u)
+            {
+                char hh = hashHex[i];
+                if (hh >= '8')
+                    hexLower[i] = (char)(c - 32);
+            }
+        }
+
+        charsWritten = required;
         return true;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int CountLeadingZeroBytes()
+    private bool TryFormatEvmChecksumUtf8(Span<byte> utf8Destination, out int bytesWritten)
     {
-        if (_u0 != 0) return (int)(ulong.LeadingZeroCount(_u0) / 8);
-        if (_u1 != 0) return 8 + (int)(ulong.LeadingZeroCount(_u1) / 8);
-        if (_u2 != 0) return 16 + (int)(ulong.LeadingZeroCount(_u2) / 8);
-        if (_u3 != 0) return 24 + (int)(ulong.LeadingZeroCount(_u3) / 8);
-        return 32;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsZero256(ulong u0, ulong u1, ulong u2, ulong u3)
-        => (u0 | u1 | u2 | u3) == 0;
-
-    /// <summary>
-    /// Divides a 256-bit number by 58 in place, returns remainder.
-    /// Big-endian order: u0 is MSB.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ulong DivMod58(ref ulong u0, ref ulong u1, ref ulong u2, ref ulong u3)
-    {
-        // 256-bit division by 58
-        // Process from most significant to least significant
-        ulong remainder = 0;
-        
-        // u0 (most significant)
-        ulong dividend = remainder * (1UL << 32) * (1UL << 32) + u0;
-        // We need 128-bit division here, use Math.DivRem approach
-        (ulong q0High, ulong r0) = DivMod64By58WithRemainder(u0, remainder);
-        u0 = q0High;
-        remainder = r0;
-
-        (ulong q1High, ulong r1) = DivMod64By58WithRemainder(u1, remainder);
-        u1 = q1High;
-        remainder = r1;
-
-        (ulong q2High, ulong r2) = DivMod64By58WithRemainder(u2, remainder);
-        u2 = q2High;
-        remainder = r2;
-
-        (ulong q3High, ulong r3) = DivMod64By58WithRemainder(u3, remainder);
-        u3 = q3High;
-        
-        return r3;
-    }
-
-    /// <summary>
-    /// Divides (remainder * 2^64 + value) by 58, returns quotient and new remainder.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static (ulong quotient, ulong remainder) DivMod64By58WithRemainder(ulong value, ulong carry)
-    {
-        // Use 128-bit arithmetic via UInt128
-        UInt128 dividend = ((UInt128)carry << 64) | value;
-        UInt128 quotient = dividend / 58;
-        ulong remainder = (ulong)(dividend % 58);
-        return ((ulong)quotient, remainder);
-    }
-
-    /// <summary>
-    /// Multiplies a 256-bit number by 58 and adds a digit in place.
-    /// Returns false on overflow.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool MulAdd58(ref ulong u0, ref ulong u1, ref ulong u2, ref ulong u3, ulong digit)
-    {
-        // Multiply each component by 58 with carry
-        // Process from least significant (u3) to most significant (u0)
-        
-        UInt128 prod3 = (UInt128)u3 * 58 + digit;
-        u3 = (ulong)prod3;
-        ulong carry = (ulong)(prod3 >> 64);
-
-        UInt128 prod2 = (UInt128)u2 * 58 + carry;
-        u2 = (ulong)prod2;
-        carry = (ulong)(prod2 >> 64);
-
-        UInt128 prod1 = (UInt128)u1 * 58 + carry;
-        u1 = (ulong)prod1;
-        carry = (ulong)(prod1 >> 64);
-
-        UInt128 prod0 = (UInt128)u0 * 58 + carry;
-        u0 = (ulong)prod0;
-        carry = (ulong)(prod0 >> 64);
-
-        // Overflow if there's remaining carry
-        return carry == 0;
-    }
-
-    #endregion
-
-    #region Conversions
-
-    /// <summary>
-    /// Creates a zero EVM address.
-    /// </summary>
-    public static Address ZeroEvm => new(0, 0, 0, 0, AddressType.Evm);
-
-    /// <summary>
-    /// Creates a zero Solana address.
-    /// </summary>
-    public static Address ZeroSolana => new(0, 0, 0, 0, AddressType.Solana);
-
-    /// <summary>
-    /// Converts to Hash32 (only valid for Solana addresses).
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Hash32 ToHash32()
-    {
-        if (_type != AddressType.Solana)
-            throw new InvalidOperationException("Only Solana addresses can be converted to Hash32");
-        return new Hash32(_u0, _u1, _u2, _u3);
-    }
-
-    /// <summary>
-    /// Creates a Solana Address from a Hash32.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Address FromHash32(Hash32 hash)
-    {
-        Span<byte> bytes = stackalloc byte[SolanaByteLength];
-        hash.WriteBigEndian(bytes);
-        return FromSolanaBytes(bytes);
-    }
-
-    #endregion
-}
-
-/// <summary>
-/// Minimal Keccak-256 implementation for EIP-55 checksum.
-/// Optimized for the specific use case of hashing 40-byte ASCII hex strings.
-/// </summary>
-internal static class Keccak256
-{
-    private const int StateSize = 25; // 5x5 state matrix of 64-bit words
-    private const int Rate = 136; // (1600 - 256*2) / 8 = 136 bytes
-    private const int Rounds = 24;
-
-    private static readonly ulong[] RoundConstants =
-    [
-        0x0000000000000001UL, 0x0000000000008082UL, 0x800000000000808aUL, 0x8000000080008000UL,
-        0x000000000000808bUL, 0x0000000080000001UL, 0x8000000080008081UL, 0x8000000000008009UL,
-        0x000000000000008aUL, 0x0000000000000088UL, 0x0000000080008009UL, 0x000000008000000aUL,
-        0x000000008000808bUL, 0x800000000000008bUL, 0x8000000000008089UL, 0x8000000000008003UL,
-        0x8000000000008002UL, 0x8000000000000080UL, 0x000000000000800aUL, 0x800000008000000aUL,
-        0x8000000080008081UL, 0x8000000000008080UL, 0x0000000080000001UL, 0x8000000080008008UL
-    ];
-
-    private static readonly int[] RotationOffsets =
-    [
-        0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14
-    ];
-
-    public static void ComputeHash(ReadOnlySpan<byte> input, Span<byte> output)
-    {
-        if (output.Length < 32)
-            throw new ArgumentException("Output buffer must be at least 32 bytes");
-
-        Span<ulong> state = stackalloc ulong[StateSize];
-        state.Clear();
-
-        // Absorb phase
-        int blockCount = input.Length / Rate;
-        int offset = 0;
-
-        for (int i = 0; i < blockCount; i++)
+        const int required = EvmHexLength + 2;
+        if (utf8Destination.Length < required)
         {
-            AbsorbBlock(state, input.Slice(offset, Rate));
-            offset += Rate;
+            bytesWritten = 0;
+            return false;
         }
 
-        // Final block with padding
-        int remaining = input.Length - offset;
-        Span<byte> finalBlock = stackalloc byte[Rate];
-        finalBlock.Clear();
-        
-        if (remaining > 0)
-            input.Slice(offset, remaining).CopyTo(finalBlock);
-        
-        // Keccak padding: append 0x01, then zeros, then 0x80
-        finalBlock[remaining] = 0x01;
-        finalBlock[Rate - 1] |= 0x80;
-        
-        AbsorbBlock(state, finalBlock);
-
-        // Squeeze phase - extract 32 bytes
-        for (int i = 0; i < 4; i++)
+        // Compute checksum in chars (ASCII) then copy to UTF-8.
+        Span<char> tmp = stackalloc char[required];
+        if (!TryFormatEvmChecksumChars(tmp, out int written) || written != required)
         {
-            BinaryPrimitives.WriteUInt64LittleEndian(output.Slice(i * 8), state[i]);
+            bytesWritten = 0;
+            return false;
         }
+
+        for (int i = 0; i < required; i++)
+            utf8Destination[i] = (byte)tmp[i];
+
+        bytesWritten = required;
+        return true;
     }
 
-    private static void AbsorbBlock(Span<ulong> state, ReadOnlySpan<byte> block)
+    private static bool TryGetEvmFormat(ReadOnlySpan<char> format, out EvmFormat evmFormat)
     {
-        // XOR block into state
-        int words = block.Length / 8;
-        for (int i = 0; i < words; i++)
+        // Default: "0x" lowercase prefix + lowercase digits.
+        if (format.IsEmpty)
         {
-            state[i] ^= BinaryPrimitives.ReadUInt64LittleEndian(block.Slice(i * 8));
+            evmFormat = EvmFormat.Default;
+            return true;
         }
 
-        // Apply Keccak-f[1600] permutation
-        KeccakF(state);
+        // Single-char formats.
+        if (format.Length == 1)
+        {
+            char f = format[0];
+            if (f == 'x') { evmFormat = new EvmFormat(withPrefix: false, prefixUppercase: false, hexUppercase: false, kind: EvmFormatKind.Hex); return true; }
+            if (f == 'X') { evmFormat = new EvmFormat(withPrefix: false, prefixUppercase: false, hexUppercase: true, kind: EvmFormatKind.Hex); return true; }
+            if (f == 'c' || f == 'C') { evmFormat = new EvmFormat(withPrefix: true, prefixUppercase: false, hexUppercase: false, kind: EvmFormatKind.Checksum); return true; }
+        }
+
+        // Two-char prefix formats.
+        if (format.Length == 2 && format[0] == '0' && (format[1] == 'x' || format[1] == 'X'))
+        {
+            bool prefixUpper = format[1] == 'X';
+            // Convention: "0X" implies uppercase digits.
+            evmFormat = new EvmFormat(withPrefix: true, prefixUppercase: prefixUpper, hexUppercase: prefixUpper, kind: EvmFormatKind.Hex);
+            return true;
+        }
+
+        evmFormat = default;
+        return false;
     }
 
-    private static void KeccakF(Span<ulong> state)
+    private enum EvmFormatKind : byte
     {
-        Span<ulong> C = stackalloc ulong[5];
-        Span<ulong> D = stackalloc ulong[5];
-        Span<ulong> B = stackalloc ulong[25];
-
-        for (int round = 0; round < Rounds; round++)
-        {
-            // θ step
-            for (int x = 0; x < 5; x++)
-            {
-                C[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
-            }
-
-            for (int x = 0; x < 5; x++)
-            {
-                D[x] = C[(x + 4) % 5] ^ RotateLeft(C[(x + 1) % 5], 1);
-            }
-
-            for (int i = 0; i < 25; i++)
-            {
-                state[i] ^= D[i % 5];
-            }
-
-            // ρ and π steps
-            for (int i = 0; i < 25; i++)
-            {
-                int x = i % 5;
-                int y = i / 5;
-                int newX = y;
-                int newY = (2 * x + 3 * y) % 5;
-                B[newX + 5 * newY] = RotateLeft(state[i], RotationOffsets[i]);
-            }
-
-            // χ step
-            for (int y = 0; y < 5; y++)
-            {
-                for (int x = 0; x < 5; x++)
-                {
-                    state[x + 5 * y] = B[x + 5 * y] ^ ((~B[(x + 1) % 5 + 5 * y]) & B[(x + 2) % 5 + 5 * y]);
-                }
-            }
-
-            // ι step
-            state[0] ^= RoundConstants[round];
-        }
+        Hex = 0,
+        Checksum = 1
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ulong RotateLeft(ulong value, int offset)
-        => (value << offset) | (value >> (64 - offset));
+    private readonly struct EvmFormat(bool withPrefix, bool prefixUppercase, bool hexUppercase, Address.EvmFormatKind kind)
+    {
+        public static readonly EvmFormat Default = new(withPrefix: true, prefixUppercase: false, hexUppercase: false, kind: EvmFormatKind.Hex);
+
+        public readonly bool WithPrefix = withPrefix;
+        public readonly bool PrefixUppercase = prefixUppercase;
+        public readonly bool HexUppercase = hexUppercase;
+        public readonly EvmFormatKind Kind = kind;
+    }
 }

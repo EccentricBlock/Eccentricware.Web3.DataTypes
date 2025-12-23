@@ -1,80 +1,48 @@
-using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace EccentricWare.Web3.DataTypes.ValueConverters;
 
 /// <summary>
-/// EF Core ValueConverter for Address storing as fixed 33-byte binary.
-/// 
-/// Storage format: [1 byte type][32 bytes data (right-padded for EVM)]
-/// - EVM addresses: type + 20 bytes data + 12 bytes zero padding
-/// - Solana addresses: type + 32 bytes data
-/// 
-/// Fixed-size storage optimized for high-volume indexed lookups:
-/// - Optimal B-tree page packing with predictable row sizes
-/// - Fast memcmp comparisons without length prefix parsing
-/// - Better CPU cache utilization with aligned, fixed-size data
-/// - Consistent index seeks with direct offset calculation
-/// 
-/// For tens of millions of rows with frequent searches, the query performance
-/// benefits of fixed-size columns outweigh the 12-byte storage overhead per EVM address.
+/// EF Core value converter for persisting <see cref="Address"/> into a single binary column.
+/// Encoding: 1 byte <see cref="AddressType"/> + raw address bytes (20 for EVM, 32 for Solana).
 /// </summary>
 public sealed class AddressValueConverter : ValueConverter<Address, byte[]>
 {
-    /// <summary>
-    /// Fixed storage size: 1 byte type + 32 bytes data.
-    /// EVM addresses are zero-padded to maintain fixed size for optimal indexing.
-    /// </summary>
-    public const int StorageSize = 1 + Address.SolanaByteLength; // 33
-
-    private static readonly Expression<Func<Address, byte[]>> ToProviderExpr = 
-        static v => ToBytes(v);
-    
-    private static readonly Expression<Func<byte[], Address>> FromProviderExpr = 
-        static v => FromBytes(v);
-
-    public AddressValueConverter() : base(ToProviderExpr, FromProviderExpr)
+    /// <summary>Creates a converter that stores <see cref="Address"/> as a compact binary payload.</summary>
+    public AddressValueConverter(ConverterMappingHints? mappingHints = null)
+        : base(
+            model => AddressToBytes(model),
+            provider => BytesToAddress(provider),
+            mappingHints)
     {
     }
 
-    public AddressValueConverter(ConverterMappingHints? mappingHints) 
-        : base(ToProviderExpr, FromProviderExpr, mappingHints)
+    /// <summary>Encodes an <see cref="Address"/> into a compact binary representation.</summary>
+    public static byte[] AddressToBytes(Address address)
     {
+        int addressLength = address.ByteLength;
+        byte[] payload = new byte[1 + addressLength];
+
+        payload[0] = (byte)address.Type;
+        address.WriteBytes(payload.AsSpan(1));
+
+        return payload;
     }
 
-    /// <summary>
-    /// Default mapping hints for database column configuration.
-    /// Specifies fixed 33-byte binary storage for optimal indexing.
-    /// </summary>
-    public static readonly ConverterMappingHints DefaultHints = new(size: StorageSize);
-
-    private static byte[] ToBytes(Address value)
+    /// <summary>Decodes an <see cref="Address"/> from the compact binary representation.</summary>
+    public static Address BytesToAddress(byte[] payload)
     {
-        // Fixed 33-byte array: [type][32 bytes data]
-        var bytes = new byte[StorageSize];
-        
-        // First byte is the address type
-        bytes[0] = (byte)value.Type;
-        
-        // Write address data (20 or 32 bytes)
-        // For EVM, remaining 12 bytes stay as zeros (padding)
-        value.WriteBytes(bytes.AsSpan(1, value.ByteLength));
-        
-        return bytes;
-    }
+        if (payload is null || payload.Length < 1)
+            throw new ArgumentException("Address payload is null or empty.", nameof(payload));
 
-    private static Address FromBytes(byte[] bytes)
-    {
-        var type = (AddressType)bytes[0];
-        
-        return type switch
+        AddressType addressType = (AddressType)payload[0];
+        ReadOnlySpan<byte> bytes = payload.AsSpan(1);
+
+        return addressType switch
         {
-            // EVM: read only first 20 bytes of data section
-            AddressType.Evm => Address.FromEvmBytes(bytes.AsSpan(1, Address.EvmByteLength)),
-            // Solana: read all 32 bytes
-            AddressType.Solana => Address.FromSolanaBytes(bytes.AsSpan(1, Address.SolanaByteLength)),
-            _ => throw new InvalidOperationException($"Unknown address type: {type}")
+            AddressType.Evm when bytes.Length == Address.EvmByteLength => Address.FromEvmBytes(bytes),
+            AddressType.Solana when bytes.Length == Address.SolanaByteLength => Address.FromSolanaBytes(bytes),
+            _ => throw new FormatException($"Invalid {nameof(Address)} payload length {bytes.Length} for type {addressType}.")
         };
     }
 }
-

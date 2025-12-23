@@ -1,51 +1,43 @@
-using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace EccentricWare.Web3.DataTypes.ValueConverters;
 
+
 /// <summary>
-/// EF Core ValueConverter for int256 storing as fixed 32-byte big-endian binary.
-/// Two's complement representation preserves sign for database storage.
-/// 
-/// Optimal for database indexing: fixed-size binary enables efficient B-tree indexes.
-/// Note: Signed comparison in database may differ from int256 comparison
-/// unless using signed binary types or application-level sorting.
+/// EF Core provider converter for storing <see cref="int256"/> as a fixed-length 32-byte array.
+/// Big-endian two's complement encoding is used for stable persistence.
+/// Note: lexicographic order of two's complement bytes does not match signed numeric order across the sign boundary.
 /// </summary>
-public sealed class Int256ValueConverter : ValueConverter<int256, byte[]>
+public sealed class Int256BytesValueConverter : ValueConverter<int256, byte[]>
 {
     /// <summary>
-    /// The fixed storage size in bytes.
+    /// Creates a converter that maps int256 &lt;-&gt; 32-byte big-endian two's complement array.
     /// </summary>
-    public const int StorageSize = 32;
-
-    private static readonly Expression<Func<int256, byte[]>> ToProviderExpr = 
-        static v => ToBytes(v);
-    
-    private static readonly Expression<Func<byte[], int256>> FromProviderExpr = 
-        static v => FromBytes(v);
-
-    public Int256ValueConverter() : base(ToProviderExpr, FromProviderExpr)
-    {
-    }
-
-    public Int256ValueConverter(ConverterMappingHints? mappingHints) 
-        : base(ToProviderExpr, FromProviderExpr, mappingHints)
+    public Int256BytesValueConverter()
+        : base(
+            model => ConvertToProvider(model),
+            provider => ConvertFromProvider(provider))
     {
     }
 
     /// <summary>
-    /// Default mapping hints for database column configuration.
-    /// Specifies fixed 32-byte binary storage.
+    /// Converts an int256 to a 32-byte big-endian two's complement array.
     /// </summary>
-    public static readonly ConverterMappingHints DefaultHints = new(size: StorageSize);
-
-    private static byte[] ToBytes(int256 value)
+    private new static byte[] ConvertToProvider(int256 value)
     {
-        var bytes = new byte[StorageSize];
-        value.WriteBigEndian(bytes);
-        return bytes;
+        return value.ToBigEndianBytes();
     }
 
-    private static int256 FromBytes(byte[] bytes) => new(bytes);
-}
+    /// <summary>
+    /// Converts a 32-byte big-endian two's complement array to int256.
+    /// </summary>
+    private new static int256 ConvertFromProvider(byte[] bytes)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
 
+        if (bytes.Length != 32)
+            throw new FormatException("int256 provider value must be exactly 32 bytes.");
+
+        return new int256(bytes);
+    }
+}

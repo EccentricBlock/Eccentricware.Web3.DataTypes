@@ -3,74 +3,62 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace EccentricWare.Web3.DataTypes.ValueConverters;
 
+
 /// <summary>
-/// EF Core ValueConverter for Signature storing as fixed 66-byte binary.
-/// 
-/// Storage format: [1 byte type][65 bytes max data]
-/// - EVM signatures: type (0) + 65 bytes (r + s + v)
-/// - Solana signatures: type (1) + 64 bytes + 1 byte padding
-/// 
-/// Fixed-size storage optimized for indexed lookups:
-/// - Consistent B-tree page packing
-/// - Fast memcmp comparisons
-/// - Predictable row sizes
+/// EF Core value converter for <see cref="Signature"/> using a compact fixed-length binary encoding.
 /// </summary>
-public sealed class SignatureValueConverter : ValueConverter<Signature, byte[]>
+/// <remarks>
+/// Provider layout (66 bytes):
+/// - [0]      : SignatureType (1 byte)
+/// - [1..64]  : Signature payload (64 bytes)
+/// - [65]     : EVM v byte (0 for Solana)
+///
+/// Recommended column types:
+/// - SQL Server: BINARY(66) or VARBINARY(66)
+/// - PostgreSQL: BYTEA (enforce length via constraint if needed)
+/// </remarks>
+/// <remarks>
+/// Creates the converter with an optional mapping hint for fixed-size storage.
+/// </remarks>
+public sealed class SignatureValueConverter(ConverterMappingHints? mappingHints = null) : ValueConverter<Signature, byte[]>(ToProviderExpression, FromProviderExpression,
+        mappingHints ?? new ConverterMappingHints(size: 66))
 {
-    /// <summary>
-    /// Fixed storage size: 1 byte type + 65 bytes data (EVM max).
-    /// Solana signatures use 64 bytes + 1 byte padding.
-    /// </summary>
-    public const int StorageSize = 1 + Signature.EvmByteLength; // 66
+    private static readonly Expression<Func<Signature, byte[]>> ToProviderExpression
+        = sig => ToProviderBytes(sig);
 
-    private static readonly Expression<Func<Signature, byte[]>> ToProviderExpr = 
-        static v => ToBytes(v);
-    
-    private static readonly Expression<Func<byte[], Signature>> FromProviderExpr = 
-        static v => FromBytes(v);
-
-    public SignatureValueConverter() : base(ToProviderExpr, FromProviderExpr)
-    {
-    }
-
-    public SignatureValueConverter(ConverterMappingHints? mappingHints) 
-        : base(ToProviderExpr, FromProviderExpr, mappingHints)
-    {
-    }
+    private static readonly Expression<Func<byte[], Signature>> FromProviderExpression
+        = bytes => FromProviderBytes(bytes);
 
     /// <summary>
-    /// Default mapping hints for database column configuration.
-    /// Specifies fixed 66-byte binary storage.
+    /// Converts a <see cref="Signature"/> to the 66-byte provider encoding.
     /// </summary>
-    public static readonly ConverterMappingHints DefaultHints = new(size: StorageSize);
-
-    private static byte[] ToBytes(Signature value)
+    private static byte[] ToProviderBytes(Signature signature)
     {
-        // Fixed 66-byte array: [type][65 bytes data]
-        var bytes = new byte[StorageSize];
-        
-        // First byte is the signature type
-        bytes[0] = (byte)value.Type;
-        
-        // Write signature data (64 or 65 bytes)
-        // For Solana, last byte stays as zero (padding)
-        value.WriteBytes(bytes.AsSpan(1, value.ByteLength));
-        
+        byte[] bytes = new byte[66];
+        bytes[0] = (byte)signature.Type;
+
+        // Writes 64 payload bytes; for EVM writes v into offset 64 of this span (i.e. bytes[65]).
+        signature.WriteBytes(bytes.AsSpan(1));
         return bytes;
     }
 
-    private static Signature FromBytes(byte[] bytes)
+    /// <summary>
+    /// Converts the 66-byte provider encoding to a <see cref="Signature"/>.
+    /// </summary>
+    private static Signature FromProviderBytes(byte[] bytes)
     {
-        var type = (SignatureType)bytes[0];
-        
+        ArgumentNullException.ThrowIfNull(bytes);
+
+        if (bytes.Length != 66)
+            throw new ArgumentException("Invalid signature byte length; expected 66 bytes.", nameof(bytes));
+
+        SignatureType type = (SignatureType)bytes[0];
+
         return type switch
         {
-            // EVM: read 65 bytes
             SignatureType.Evm => Signature.FromEvmBytes(bytes.AsSpan(1, Signature.EvmByteLength)),
-            // Solana: read 64 bytes
             SignatureType.Solana => Signature.FromSolanaBytes(bytes.AsSpan(1, Signature.SolanaByteLength)),
-            _ => throw new InvalidOperationException($"Unknown signature type: {type}")
+            _ => throw new ArgumentOutOfRangeException(nameof(bytes), "Unknown signature type byte.")
         };
     }
 }
-

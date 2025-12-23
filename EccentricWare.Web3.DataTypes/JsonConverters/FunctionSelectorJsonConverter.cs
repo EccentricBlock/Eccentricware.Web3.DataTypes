@@ -1,59 +1,45 @@
-using System.Globalization;
+using EccentricWare.Web3.DataTypes.Utils;
+using System.Buffers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace EccentricWare.Web3.DataTypes.JsonConverters;
 
 /// <summary>
-/// JSON converter for FunctionSelector that serializes as hex string with 0x prefix.
-/// Optimized for minimal allocations using UTF-8 spans.
+/// JSON converter for <see cref="FunctionSelector"/> that parses from UTF-8 without string allocations.
+/// Accepts "0x" prefixed or non-prefixed hex with exactly 8 digits.
 /// </summary>
 public sealed class FunctionSelectorJsonConverter : JsonConverter<FunctionSelector>
 {
+    /// <summary>
+    /// Reads a selector from JSON.
+    /// </summary>
     public override FunctionSelector Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
+        if (reader.TokenType == JsonTokenType.Null)
+            return FunctionSelector.Zero;
+
         if (reader.TokenType != JsonTokenType.String)
-            throw new JsonException($"Cannot convert {reader.TokenType} to FunctionSelector");
+            ThrowHelper.ThrowJsonExceptionExpectedString(nameof(FunctionSelector));
 
-        // Fast path: use raw UTF-8 span directly
-        if (reader.HasValueSequence)
-        {
-            var str = reader.GetString();
-            return str is null ? FunctionSelector.Zero : FunctionSelector.Parse(str, CultureInfo.InvariantCulture);
-        }
+        ReadOnlySpan<byte> utf8 = reader.HasValueSequence
+            ? reader.ValueSequence.ToArray() // Rare; still correct. Prefer contiguous in practice.
+            : reader.ValueSpan;
 
-        ReadOnlySpan<byte> utf8 = reader.ValueSpan;
-        
-        // Handle 0x prefix
-        if (utf8.Length >= 2 && utf8[0] == '0' && (utf8[1] == 'x' || utf8[1] == 'X'))
-            utf8 = utf8.Slice(2);
+        if (!FunctionSelector.TryParse(utf8, out var selector))
+            ThrowHelper.ThrowJsonExceptionInvalidValue(nameof(FunctionSelector));
 
-        if (utf8.Length != FunctionSelector.HexLength)
-            throw new JsonException($"FunctionSelector requires exactly {FunctionSelector.HexLength} hex characters");
-
-        // Parse UTF-8 hex directly without string allocation
-        Span<char> chars = stackalloc char[FunctionSelector.HexLength];
-        for (int i = 0; i < FunctionSelector.HexLength; i++)
-            chars[i] = (char)utf8[i];
-
-        if (!FunctionSelector.TryParse(chars, out var result))
-            throw new JsonException("Invalid hex string for FunctionSelector");
-
-        return result;
+        return selector;
     }
 
+    /// <summary>
+    /// Writes a selector to JSON as a canonical 0x-prefixed lowercase string.
+    /// </summary>
     public override void Write(Utf8JsonWriter writer, FunctionSelector value, JsonSerializerOptions options)
     {
-        // Write directly to UTF-8 buffer without string allocation
-        Span<byte> buffer = stackalloc byte[FunctionSelector.HexLength + 2]; // "0x" + 8 hex chars
-        if (value.TryFormat(buffer, out int bytesWritten, default, CultureInfo.InvariantCulture))
-        {
-            writer.WriteStringValue(buffer.Slice(0, bytesWritten));
-        }
-        else
-        {
-            writer.WriteStringValue(value.ToString());
-        }
+        Span<byte> tmp = stackalloc byte[FunctionSelector.HexLength + 2];
+        value.TryFormat(tmp, out int written, "0x".AsSpan(), provider: null);
+        writer.WriteStringValue(tmp.Slice(0, written));
     }
 }
 

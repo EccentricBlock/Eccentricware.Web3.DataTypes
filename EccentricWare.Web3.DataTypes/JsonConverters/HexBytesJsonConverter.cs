@@ -1,3 +1,5 @@
+using EccentricWare.Web3.DataTypes.Utils;
+using System.Buffers;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -5,29 +7,45 @@ using System.Text.Json.Serialization;
 namespace EccentricWare.Web3.DataTypes.JsonConverters;
 
 /// <summary>
-/// JSON converter for HexBytes that serializes as hex string with 0x prefix.
-/// Handles variable-length byte arrays efficiently.
+/// System.Text.Json converter for <see cref="HexBytes"/>.
 /// </summary>
 public sealed class HexBytesJsonConverter : JsonConverter<HexBytes>
 {
+    /// <summary>
+    /// Reads a JSON string token as hex bytes (optionally 0x-prefixed).
+    /// </summary>
     public override HexBytes Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         if (reader.TokenType == JsonTokenType.Null)
             return HexBytes.Empty;
 
         if (reader.TokenType != JsonTokenType.String)
-            throw new JsonException($"Cannot convert {reader.TokenType} to HexBytes");
+            throw new FormatException("Expected String");
 
-        var str = reader.GetString();
-        if (str is null)
-            return HexBytes.Empty;
+        ReadOnlySpan<byte> utf8 = reader.HasValueSequence ? reader.ValueSequence.ToArray() : reader.ValueSpan;
 
-        if (!HexBytes.TryParse(str, out var result))
-            throw new JsonException("Invalid hex string for HexBytes");
+        // If escaped, materialise the unescaped string into a temporary buffer.
+        if (reader.ValueIsEscaped)
+        {
+            Span<byte> scratch = stackalloc byte[utf8.Length];
+            int written = reader.CopyString(scratch);
+            var slice = scratch.Slice(0, written);
 
-        return result;
+            if (!HexBytes.TryParse(slice, out var parsed))
+                ThrowHelper.ThrowFormatExceptionInvalidHex();
+
+            return parsed;
+        }
+
+        if (!HexBytes.TryParse(utf8, out var value))
+            ThrowHelper.ThrowFormatExceptionInvalidHex();
+
+        return value;
     }
 
+    /// <summary>
+    /// Writes the value as a JSON string containing 0x-prefixed lowercase hex.
+    /// </summary>
     public override void Write(Utf8JsonWriter writer, HexBytes value, JsonSerializerOptions options)
     {
         if (value.IsEmpty)
@@ -36,20 +54,29 @@ public sealed class HexBytesJsonConverter : JsonConverter<HexBytes>
             return;
         }
 
-        // For small payloads, use stack allocation
-        int requiredLength = value.HexLength + 2;
-        if (requiredLength <= 512)
+        // Write as UTF-8 to avoid allocating a managed string.
+        int required = value.HexLength + 2;
+
+        // Use stackalloc for small values; pool for larger values.
+        const int StackLimit = 512;
+        if (required <= StackLimit)
         {
-            Span<byte> buffer = stackalloc byte[requiredLength];
-            if (value.TryFormat(buffer, out int bytesWritten, default, CultureInfo.InvariantCulture))
-            {
-                writer.WriteStringValue(buffer.Slice(0, bytesWritten));
-                return;
-            }
+            Span<byte> utf8 = stackalloc byte[required];
+            _ = value.TryFormat(utf8, out int written, default, CultureInfo.InvariantCulture);
+            writer.WriteStringValue(utf8.Slice(0, written));
+            return;
         }
 
-        // Fallback for larger payloads
-        writer.WriteStringValue(value.ToString());
+        byte[] rented = ArrayPool<byte>.Shared.Rent(required);
+        try
+        {
+            Span<byte> utf8 = rented.AsSpan(0, required);
+            _ = value.TryFormat(utf8, out int written, default, CultureInfo.InvariantCulture);
+            writer.WriteStringValue(utf8.Slice(0, written));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 }
-

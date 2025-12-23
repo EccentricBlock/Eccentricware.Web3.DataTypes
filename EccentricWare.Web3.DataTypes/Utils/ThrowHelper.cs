@@ -1,4 +1,6 @@
 ﻿using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
 
 namespace EccentricWare.Web3.DataTypes.Utils;
 
@@ -10,6 +12,82 @@ namespace EccentricWare.Web3.DataTypes.Utils;
 /// </summary>
 internal static class ThrowHelper
 {
+    /// <summary>
+    /// Throws an <see cref="ArgumentNullException"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowArgumentNullException(string paramName)
+        => throw new ArgumentNullException(paramName);
+
+    /// <summary>
+    /// Throws an <see cref="ArgumentException"/> for an invalid function selector length.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowArgumentExceptionInvalidFunctionSelectorLength(string paramName)
+        => throw new ArgumentException("Function selector must be at least 4 bytes.", paramName);
+
+    /// <summary>
+    /// Throws an <see cref="ArgumentException"/> for an invalid discriminator length.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowArgumentExceptionInvalidDiscriminatorLength(string paramName)
+        => throw new ArgumentException("Instruction discriminator must be at least 8 bytes.", paramName);
+
+    /// <summary>
+    /// Throws an <see cref="ArgumentException"/> when a destination span is too small.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowArgumentExceptionDestinationTooSmall(string paramName)
+        => throw new ArgumentException("Destination buffer is too small.", paramName);
+
+    /// <summary>
+    /// Throws an <see cref="ArgumentException"/> when an argument is the wrong runtime type.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowArgumentExceptionWrongType(string paramName, string expectedTypeName)
+        => throw new ArgumentException($"Object must be of type {expectedTypeName}.", paramName);
+
+    /// <summary>
+    /// Throws an <see cref="ArgumentException"/> when a fixed-size span is the wrong length.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowArgumentExceptionFixedSize(string paramName, int requiredLength)
+        => throw new ArgumentException($"Destination must be exactly {requiredLength} elements long.", paramName);
+
+    /// <summary>
+    /// Throws a <see cref="FormatException"/> for an invalid function selector.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowFormatExceptionInvalidFunctionSelector()
+        => throw new FormatException("Invalid function selector hex value.");
+
+    /// <summary>
+    /// Throws a <see cref="FormatException"/> for an invalid instruction discriminator.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowFormatExceptionInvalidDiscriminator()
+        => throw new FormatException("Invalid instruction discriminator hex value.");
+
+    /// <summary>
+    /// Throws a <see cref="FormatException"/> for an unsupported format string.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowFormatExceptionUnknownFormat(ReadOnlySpan<char> format)
+        => throw new FormatException($"Unknown format: \"{format.ToString()}\"");
+
+    /// <summary>
+    /// Throws a <see cref="JsonException"/> indicating a string token was expected.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowJsonExceptionExpectedString(string typeName)
+        => throw new JsonException($"Expected JSON string for {typeName}.");
+
+    /// <summary>
+    /// Throws a <see cref="JsonException"/> indicating an invalid value for the target type.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowJsonExceptionInvalidValue(string typeName)
+        => throw new JsonException($"Invalid value for {typeName}.");
     [DoesNotReturn]
     public static void ThrowFormatExceptionInvalidBase64()
      => throw new FormatException("Invalid Base64 encoded value.");
@@ -24,9 +102,6 @@ internal static class ThrowHelper
     public static void ThrowArgumentExceptionInvalidLength(string paramName)
         => throw new ArgumentException($"Hash32 requires exactly {Hash32.ByteLength} bytes", paramName);
 
-    [DoesNotReturn]
-    public static void ThrowArgumentExceptionDestinationTooSmall(string paramName)
-        => throw new ArgumentException("Destination buffer is too small", paramName);
 
     [DoesNotReturn]
     public static void ThrowFormatExceptionInvalidHexLength()
@@ -60,11 +135,6 @@ internal static class ThrowHelper
     [DoesNotReturn]
     public static void ThrowFormatExceptionInvalidBase58()
         => throw new FormatException("Invalid Base58 string for Solana address");
-
-    // FunctionSelector exceptions
-    [DoesNotReturn]
-    public static void ThrowArgumentExceptionInvalidFunctionSelectorLength(string paramName)
-        => throw new ArgumentException($"FunctionSelector requires exactly {FunctionSelector.ByteLength} bytes", paramName);
 
     [DoesNotReturn]
     public static void ThrowFormatExceptionInvalidFunctionSelectorHexLength()

@@ -1,4 +1,3 @@
-using EccentricWare.Web3.DataTypes.JsonConverters;
 using EccentricWare.Web3.DataTypes.Utils;
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
@@ -6,72 +5,70 @@ using System.Globalization;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Runtime.Intrinsics;
-using System.Text.Json.Serialization;
 
 namespace EccentricWare.Web3.DataTypes;
 
 /// <summary>
-/// A 256-bit signed integer optimized for EVM and Solana blockchain operations.
-/// Uses 4 x 64-bit unsigned integers with two's complement representation.
-/// Memory layout: 32 bytes (4 x ulong).
+/// Represents a 256-bit signed integer using two's complement semantics with a fixed 32-byte layout (4 x 64-bit limbs).
+/// Optimised for Web3 workloads (EVM/Solana), including allocation-free parsing of hex/decimal and efficient comparisons.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-[JsonConverter(typeof(Int256JsonConverter))]
-public readonly struct int256 : 
-    IEquatable<int256>, 
-    IComparable<int256>, 
+public readonly struct int256 :
+    IEquatable<int256>,
+    IComparable<int256>,
     IComparable,
     IFormattable,
     ISpanFormattable,
     IUtf8SpanFormattable,
     ISpanParsable<int256>
 {
-    // Store as 4 x ulong (little-endian: u0 is least significant)
-    // Two's complement: sign bit is bit 255 (MSB of _u3)
-    private readonly ulong _u0; // bits 0-63 (least significant)
-    private readonly ulong _u1; // bits 64-127
-    private readonly ulong _u2; // bits 128-191
-    private readonly ulong _u3; // bits 192-255 (most significant, contains sign bit)
+    /// <summary>Least significant 64 bits (bits 0..63).</summary>
+    private readonly ulong _u0;
+    /// <summary>Bits 64..127.</summary>
+    private readonly ulong _u1;
+    /// <summary>Bits 128..191.</summary>
+    private readonly ulong _u2;
+    /// <summary>Most significant 64 bits (bits 192..255). The sign bit is bit 255 (MSB of this limb).</summary>
+    private readonly ulong _u3;
 
-    /// <summary>
-    /// The value 0.
-    /// </summary>
-    public static readonly int256 Zero;
+    /// <summary>Represents the value 0.</summary>
+    public static readonly int256 Zero = new int256(0);
 
-    /// <summary>
-    /// The value 1.
-    /// </summary>
-    public static readonly int256 One = new(1, 0, 0, 0);
+    /// <summary>Represents the value 1.</summary>
+    public static readonly int256 One = new int256(1L);
 
-    /// <summary>
-    /// The value -1 (all bits set).
-    /// </summary>
+    /// <summary>Represents the value -1.</summary>
     public static readonly int256 MinusOne = new(ulong.MaxValue, ulong.MaxValue, ulong.MaxValue, ulong.MaxValue);
 
-    /// <summary>
-    /// The maximum value (2^255 - 1).
-    /// </summary>
-    public static readonly int256 MaxValue = new(ulong.MaxValue, ulong.MaxValue, ulong.MaxValue, long.MaxValue);
+    /// <summary>Represents the minimum possible value (-2^255).</summary>
+    public static readonly int256 MinValue = new(0, 0, 0, 0x8000_0000_0000_0000UL);
 
-    /// <summary>
-    /// The minimum value (-2^255).
-    /// </summary>
-    public static readonly int256 MinValue = new(0, 0, 0, unchecked((ulong)long.MinValue));
+    /// <summary>Represents the maximum possible value (2^255 - 1).</summary>
+    public static readonly int256 MaxValue = new(ulong.MaxValue, ulong.MaxValue, ulong.MaxValue, 0x7FFF_FFFF_FFFF_FFFFUL);
 
     #region Constructors
 
+    /// <summary>
+    /// Creates a signed 256-bit value from a 64-bit signed integer.
+    /// </summary>
+    /// <param name="value">The signed 64-bit value.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int256(long value)
     {
-        _u0 = (ulong)value;
-        // Sign-extend: if negative, fill upper bits with 1s
-        ulong signExtend = value < 0 ? ulong.MaxValue : 0;
-        _u1 = signExtend;
-        _u2 = signExtend;
-        _u3 = signExtend;
+        _u0 = unchecked((ulong)value);
+        _u1 = value < 0 ? ulong.MaxValue : 0UL;
+        _u2 = value < 0 ? ulong.MaxValue : 0UL;
+        _u3 = value < 0 ? ulong.MaxValue : 0UL;
     }
 
+    /// <summary>
+    /// Creates a signed 256-bit value from four 64-bit limbs (little-endian limb order).
+    /// The limbs are interpreted as a two's complement 256-bit value.
+    /// </summary>
+    /// <param name="u0">Least significant 64 bits.</param>
+    /// <param name="u1">Bits 64..127.</param>
+    /// <param name="u2">Bits 128..191.</param>
+    /// <param name="u3">Most significant 64 bits (contains the sign bit).</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int256(ulong u0, ulong u1, ulong u2, ulong u3)
     {
@@ -81,76 +78,34 @@ public readonly struct int256 :
         _u3 = u3;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public int256(Int128 low, Int128 high)
-    {
-        _u0 = (ulong)low;
-        _u1 = (ulong)((UInt128)low >> 64);
-        _u2 = (ulong)high;
-        _u3 = (ulong)((UInt128)high >> 64);
-    }
-
     /// <summary>
-    /// Creates an int256 from a big-endian byte array (up to 32 bytes).
-    /// Interprets as signed two's complement.
+    /// Creates a signed 256-bit value from a big-endian 0..32 byte sequence interpreted as a two's complement integer.
+    /// If fewer than 32 bytes are provided, the value is sign-extended from the most significant provided byte.
     /// </summary>
-    public int256(ReadOnlySpan<byte> bigEndianBytes)
+    /// <param name="bigEndianTwosComplementBytes">Two's complement bytes in big-endian order.</param>
+    public int256(ReadOnlySpan<byte> bigEndianTwosComplementBytes)
     {
-        if (bigEndianBytes.Length > 32)
-            throw new ArgumentException("Expected at most 32 bytes", nameof(bigEndianBytes));
+        if (bigEndianTwosComplementBytes.Length > 32)
+            throw new ArgumentException("Expected at most 32 bytes.", nameof(bigEndianTwosComplementBytes));
 
-        if (bigEndianBytes.Length == 32)
+        Span<byte> padded = stackalloc byte[32];
+
+        if (bigEndianTwosComplementBytes.Length == 0)
         {
-            _u3 = BinaryPrimitives.ReadUInt64BigEndian(bigEndianBytes);
-            _u2 = BinaryPrimitives.ReadUInt64BigEndian(bigEndianBytes.Slice(8));
-            _u1 = BinaryPrimitives.ReadUInt64BigEndian(bigEndianBytes.Slice(16));
-            _u0 = BinaryPrimitives.ReadUInt64BigEndian(bigEndianBytes.Slice(24));
+            padded.Clear();
         }
         else
         {
-            // Sign-extend shorter arrays
-            bool negative = bigEndianBytes.Length > 0 && (bigEndianBytes[0] & 0x80) != 0;
-            Span<byte> padded = stackalloc byte[32];
-            padded.Fill(negative ? (byte)0xFF : (byte)0);
-            bigEndianBytes.CopyTo(padded.Slice(32 - bigEndianBytes.Length));
-            
-            _u3 = BinaryPrimitives.ReadUInt64BigEndian(padded);
-            _u2 = BinaryPrimitives.ReadUInt64BigEndian(padded.Slice(8));
-            _u1 = BinaryPrimitives.ReadUInt64BigEndian(padded.Slice(16));
-            _u0 = BinaryPrimitives.ReadUInt64BigEndian(padded.Slice(24));
+            // Sign extension based on MSB of first provided byte.
+            byte signFill = (bigEndianTwosComplementBytes[0] & 0x80) != 0 ? (byte)0xFF : (byte)0x00;
+            padded.Fill(signFill);
+            bigEndianTwosComplementBytes.CopyTo(padded.Slice(32 - bigEndianTwosComplementBytes.Length));
         }
-    }
 
-    /// <summary>
-    /// Creates an int256 from a little-endian byte array (up to 32 bytes).
-    /// </summary>
-    public static int256 FromLittleEndian(ReadOnlySpan<byte> littleEndianBytes)
-    {
-        if (littleEndianBytes.Length > 32)
-            throw new ArgumentException("Expected at most 32 bytes", nameof(littleEndianBytes));
-
-        if (littleEndianBytes.Length == 32)
-        {
-            ulong u0 = BinaryPrimitives.ReadUInt64LittleEndian(littleEndianBytes);
-            ulong u1 = BinaryPrimitives.ReadUInt64LittleEndian(littleEndianBytes.Slice(8));
-            ulong u2 = BinaryPrimitives.ReadUInt64LittleEndian(littleEndianBytes.Slice(16));
-            ulong u3 = BinaryPrimitives.ReadUInt64LittleEndian(littleEndianBytes.Slice(24));
-            return new int256(u0, u1, u2, u3);
-        }
-        else
-        {
-            // Sign-extend shorter arrays
-            bool negative = littleEndianBytes.Length > 0 && (littleEndianBytes[^1] & 0x80) != 0;
-            Span<byte> padded = stackalloc byte[32];
-            padded.Fill(negative ? (byte)0xFF : (byte)0);
-            littleEndianBytes.CopyTo(padded);
-            
-            ulong u0 = BinaryPrimitives.ReadUInt64LittleEndian(padded);
-            ulong u1 = BinaryPrimitives.ReadUInt64LittleEndian(padded.Slice(8));
-            ulong u2 = BinaryPrimitives.ReadUInt64LittleEndian(padded.Slice(16));
-            ulong u3 = BinaryPrimitives.ReadUInt64LittleEndian(padded.Slice(24));
-            return new int256(u0, u1, u2, u3);
-        }
+        _u3 = BinaryPrimitives.ReadUInt64BigEndian(padded);
+        _u2 = BinaryPrimitives.ReadUInt64BigEndian(padded.Slice(8));
+        _u1 = BinaryPrimitives.ReadUInt64BigEndian(padded.Slice(16));
+        _u0 = BinaryPrimitives.ReadUInt64BigEndian(padded.Slice(24));
     }
 
     #endregion
@@ -158,70 +113,30 @@ public readonly struct int256 :
     #region Properties
 
     /// <summary>
-    /// Returns true if this value is negative.
-    /// </summary>
-    public bool IsNegative
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => ((long)_u3) < 0;
-    }
-
-    /// <summary>
-    /// Returns the sign of this value: -1, 0, or 1.
-    /// </summary>
-    public int Sign
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get
-        {
-            if (IsZero) return 0;
-            return IsNegative ? -1 : 1;
-        }
-    }
-
-    /// <summary>
-    /// Returns true if this value is zero.
+    /// Gets a value indicating whether this value is zero.
     /// </summary>
     public bool IsZero
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get
-        {
-            if (Vector256.IsHardwareAccelerated)
-            {
-                var value = Vector256.Create(_u0, _u1, _u2, _u3);
-                return value.Equals(Vector256<ulong>.Zero);
-            }
-            return (_u0 | _u1 | _u2 | _u3) == 0;
-        }
+        get => (_u0 | _u1 | _u2 | _u3) == 0;
     }
 
     /// <summary>
-    /// Returns true if this value is one.
+    /// Gets a value indicating whether this value is negative.
     /// </summary>
-    public bool IsOne
+    public bool IsNegative
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _u0 == 1 && _u1 == 0 && _u2 == 0 && _u3 == 0;
+        get => (_u3 & 0x8000_0000_0000_0000UL) != 0;
     }
 
     /// <summary>
-    /// Returns true if value fits in a long.
+    /// Gets the sign of this value: -1 for negative, 0 for zero, 1 for positive.
     /// </summary>
-    public bool FitsInLong
+    public int Sign
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get
-        {
-            if (IsNegative)
-            {
-                // All upper bits must be 1, and _u0 must be valid negative long
-                return _u1 == ulong.MaxValue && _u2 == ulong.MaxValue && _u3 == ulong.MaxValue
-                       && (long)_u0 < 0;
-            }
-            // All upper bits must be 0, and _u0 must be valid positive long
-            return _u1 == 0 && _u2 == 0 && _u3 == 0 && (long)_u0 >= 0;
-        }
+        get => IsZero ? 0 : (IsNegative ? -1 : 1);
     }
 
     #endregion
@@ -229,13 +144,14 @@ public readonly struct int256 :
     #region Byte Conversions
 
     /// <summary>
-    /// Writes the value as a 32-byte big-endian array.
+    /// Writes the raw two's complement value as a 32-byte big-endian representation into the destination span.
     /// </summary>
+    /// <param name="destination">The destination span that must be at least 32 bytes long.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteBigEndian(Span<byte> destination)
     {
         if (destination.Length < 32)
-            throw new ArgumentException("Destination must be at least 32 bytes", nameof(destination));
+            throw new ArgumentException("Destination must be at least 32 bytes.", nameof(destination));
 
         BinaryPrimitives.WriteUInt64BigEndian(destination, _u3);
         BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(8), _u2);
@@ -244,13 +160,14 @@ public readonly struct int256 :
     }
 
     /// <summary>
-    /// Writes the value as a 32-byte little-endian array.
+    /// Writes the raw two's complement value as a 32-byte little-endian representation into the destination span.
     /// </summary>
+    /// <param name="destination">The destination span that must be at least 32 bytes long.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteLittleEndian(Span<byte> destination)
     {
         if (destination.Length < 32)
-            throw new ArgumentException("Destination must be at least 32 bytes", nameof(destination));
+            throw new ArgumentException("Destination must be at least 32 bytes.", nameof(destination));
 
         BinaryPrimitives.WriteUInt64LittleEndian(destination, _u0);
         BinaryPrimitives.WriteUInt64LittleEndian(destination.Slice(8), _u1);
@@ -259,49 +176,77 @@ public readonly struct int256 :
     }
 
     /// <summary>
-    /// Returns the value as a 32-byte big-endian array.
+    /// Returns the raw two's complement value as a new 32-byte big-endian array.
     /// </summary>
     public byte[] ToBigEndianBytes()
     {
-        var bytes = new byte[32];
+        byte[] bytes = new byte[32];
         WriteBigEndian(bytes);
         return bytes;
     }
 
     /// <summary>
-    /// Returns the value as a 32-byte little-endian array.
+    /// Returns the raw two's complement value as a new 32-byte little-endian array.
     /// </summary>
     public byte[] ToLittleEndianBytes()
     {
-        var bytes = new byte[32];
+        byte[] bytes = new byte[32];
         WriteLittleEndian(bytes);
         return bytes;
     }
 
     #endregion
 
-    #region Equality (SIMD Optimized)
+    #region Equality and Hashing
 
+    /// <summary>
+    /// Determines whether this value equals another value.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(int256 other)
     {
-        if (Vector256.IsHardwareAccelerated)
-        {
-            var left = Vector256.Create(_u0, _u1, _u2, _u3);
-            var right = Vector256.Create(other._u0, other._u1, other._u2, other._u3);
-            return left.Equals(right);
-        }
-        return _u0 == other._u0 && _u1 == other._u1 && _u2 == other._u2 && _u3 == other._u3;
+        ulong diff = (_u0 ^ other._u0) | (_u1 ^ other._u1) | (_u2 ^ other._u2) | (_u3 ^ other._u3);
+        return diff == 0;
     }
 
+    /// <summary>
+    /// Determines whether this value equals another object.
+    /// </summary>
     public override bool Equals(object? obj) => obj is int256 other && Equals(other);
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override int GetHashCode() => HashCode.Combine(_u0, _u1, _u2, _u3);
+    /// <summary>
+    /// Computes a high-quality hash code suitable for large hash tables (millions of keys).
+    /// </summary>
+    public override int GetHashCode()
+    {
+        static ulong Mix(ulong x)
+        {
+            x ^= x >> 33;
+            x *= 0xff51afd7ed558ccdUL;
+            x ^= x >> 33;
+            x *= 0xc4ceb9fe1a85ec53UL;
+            x ^= x >> 33;
+            return x;
+        }
 
+        ulong h = 0x9e3779b97f4a7c15UL;
+        h = Mix(h ^ _u0);
+        h = Mix(h ^ _u1);
+        h = Mix(h ^ _u2);
+        h = Mix(h ^ _u3);
+
+        return (int)(h ^ (h >> 32));
+    }
+
+    /// <summary>
+    /// Determines whether two values are equal.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator ==(int256 left, int256 right) => left.Equals(right);
 
+    /// <summary>
+    /// Determines whether two values are not equal.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator !=(int256 left, int256 right) => !left.Equals(right);
 
@@ -310,19 +255,18 @@ public readonly struct int256 :
     #region Comparison
 
     /// <summary>
-    /// Signed comparison.
+    /// Compares this value to another signed 256-bit value.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int CompareTo(int256 other)
     {
-        // Compare signs first
-        bool thisNeg = IsNegative;
-        bool otherNeg = other.IsNegative;
-        
-        if (thisNeg != otherNeg)
-            return thisNeg ? -1 : 1;
+        bool negA = IsNegative;
+        bool negB = other.IsNegative;
 
-        // Same sign: compare magnitudes (from MSB to LSB)
+        if (negA != negB)
+            return negA ? -1 : 1;
+
+        // For two's complement, unsigned limb ordering is monotonic within the negative range and within the non-negative range.
         if (_u3 != other._u3) return _u3 < other._u3 ? -1 : 1;
         if (_u2 != other._u2) return _u2 < other._u2 ? -1 : 1;
         if (_u1 != other._u1) return _u1 < other._u1 ? -1 : 1;
@@ -330,197 +274,201 @@ public readonly struct int256 :
         return 0;
     }
 
+    /// <summary>
+    /// Compares this value to another object.
+    /// </summary>
     public int CompareTo(object? obj)
     {
         if (obj is null) return 1;
         if (obj is int256 other) return CompareTo(other);
-        throw new ArgumentException($"Object must be of type {nameof(int256)}", nameof(obj));
+        throw new ArgumentException($"Object must be of type {nameof(int256)}.", nameof(obj));
     }
 
+    /// <summary>Returns true if left is less than right.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator <(int256 left, int256 right) => left.CompareTo(right) < 0;
 
+    /// <summary>Returns true if left is greater than right.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator >(int256 left, int256 right) => left.CompareTo(right) > 0;
 
+    /// <summary>Returns true if left is less than or equal to right.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator <=(int256 left, int256 right) => left.CompareTo(right) <= 0;
 
+    /// <summary>Returns true if left is greater than or equal to right.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator >=(int256 left, int256 right) => left.CompareTo(right) >= 0;
 
     #endregion
 
-    #region Arithmetic Operators
+    #region Arithmetic
 
     /// <summary>
-    /// Addition (wrapping, no overflow check for signed).
+    /// Adds two values and throws <see cref="OverflowException"/> if signed overflow occurs.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int256 operator +(int256 left, int256 right)
     {
-        ulong u0 = left._u0 + right._u0;
-        ulong carry0 = u0 < left._u0 ? 1UL : 0UL;
+        int256 result = AddUnchecked(left, right);
 
-        ulong u1 = left._u1 + right._u1 + carry0;
-        ulong carry1 = (u1 < left._u1 || (carry0 == 1 && u1 == left._u1)) ? 1UL : 0UL;
+        bool signLeft = left.IsNegative;
+        bool signRight = right.IsNegative;
+        bool signResult = result.IsNegative;
 
-        ulong u2 = left._u2 + right._u2 + carry1;
-        ulong carry2 = (u2 < left._u2 || (carry1 == 1 && u2 == left._u2)) ? 1UL : 0UL;
+        if (signLeft == signRight && signResult != signLeft)
+            throw new OverflowException("int256 addition overflow.");
 
-        ulong u3 = left._u3 + right._u3 + carry2;
-
-        return new int256(u0, u1, u2, u3);
+        return result;
     }
 
     /// <summary>
-    /// Subtraction (wrapping).
+    /// Adds two values and wraps on overflow (mod 2^256).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int256 AddUnchecked(int256 left, int256 right)
+    {
+        ulong r0 = left._u0 + right._u0;
+        ulong c0 = r0 < left._u0 ? 1UL : 0UL;
+
+        ulong r1 = left._u1 + right._u1 + c0;
+        ulong c1 = (r1 < left._u1 || (c0 == 1 && r1 == left._u1)) ? 1UL : 0UL;
+
+        ulong r2 = left._u2 + right._u2 + c1;
+        ulong c2 = (r2 < left._u2 || (c1 == 1 && r2 == left._u2)) ? 1UL : 0UL;
+
+        ulong r3 = left._u3 + right._u3 + c2;
+
+        return new int256(r0, r1, r2, r3);
+    }
+
+    /// <summary>
+    /// Subtracts two values and throws <see cref="OverflowException"/> if signed overflow occurs.
+    /// </summary>
     public static int256 operator -(int256 left, int256 right)
     {
-        ulong borrow0 = left._u0 < right._u0 ? 1UL : 0UL;
-        ulong u0 = left._u0 - right._u0;
+        int256 result = SubtractUnchecked(left, right);
 
-        ulong borrow1 = (left._u1 < right._u1 || (left._u1 == right._u1 && borrow0 == 1)) ? 1UL : 0UL;
-        ulong u1 = left._u1 - right._u1 - borrow0;
+        bool signLeft = left.IsNegative;
+        bool signRight = right.IsNegative;
+        bool signResult = result.IsNegative;
 
-        ulong borrow2 = (left._u2 < right._u2 || (left._u2 == right._u2 && borrow1 == 1)) ? 1UL : 0UL;
-        ulong u2 = left._u2 - right._u2 - borrow1;
+        // Overflow if signs differ and result sign differs from left.
+        if (signLeft != signRight && signResult != signLeft)
+            throw new OverflowException("int256 subtraction overflow.");
 
-        ulong u3 = left._u3 - right._u3 - borrow2;
-
-        return new int256(u0, u1, u2, u3);
+        return result;
     }
 
     /// <summary>
-    /// Unary negation (two's complement).
+    /// Subtracts two values and wraps on overflow (mod 2^256).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int256 SubtractUnchecked(int256 left, int256 right)
+    {
+        ulong b0 = left._u0 < right._u0 ? 1UL : 0UL;
+        ulong r0 = left._u0 - right._u0;
+
+        ulong b1 = (left._u1 < right._u1 || (left._u1 == right._u1 && b0 == 1)) ? 1UL : 0UL;
+        ulong r1 = left._u1 - right._u1 - b0;
+
+        ulong b2 = (left._u2 < right._u2 || (left._u2 == right._u2 && b1 == 1)) ? 1UL : 0UL;
+        ulong r2 = left._u2 - right._u2 - b1;
+
+        ulong r3 = left._u3 - right._u3 - b2;
+
+        return new int256(r0, r1, r2, r3);
+    }
+
+    /// <summary>
+    /// Negates the value and throws <see cref="OverflowException"/> if the value is <see cref="MinValue"/>.
+    /// </summary>
     public static int256 operator -(int256 value)
     {
-        return ~value + One;
+        if (value.Equals(MinValue))
+            throw new OverflowException("int256 negation overflow.");
+
+        return NegateUnchecked(value);
     }
 
     /// <summary>
-    /// Unary plus (identity).
+    /// Negates the value using two's complement and wraps on overflow (mod 2^256).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static int256 operator +(int256 value) => value;
-
-    /// <summary>
-    /// Multiplication using BigInteger for correctness.
-    /// </summary>
-    public static int256 operator *(int256 left, int256 right)
+    public static int256 NegateUnchecked(int256 value)
     {
-        return (int256)((BigInteger)left * (BigInteger)right);
+        // Two's complement: ~x + 1
+        ulong u0 = ~value._u0;
+        ulong u1 = ~value._u1;
+        ulong u2 = ~value._u2;
+        ulong u3 = ~value._u3;
+
+        ulong r0 = u0 + 1UL;
+        ulong c0 = r0 == 0 ? 1UL : 0UL;
+
+        ulong r1 = u1 + c0;
+        ulong c1 = (c0 == 1 && r1 == 0) ? 1UL : 0UL;
+
+        ulong r2 = u2 + c1;
+        ulong c2 = (c1 == 1 && r2 == 0) ? 1UL : 0UL;
+
+        ulong r3 = u3 + c2;
+
+        return new int256(r0, r1, r2, r3);
     }
 
     /// <summary>
-    /// Division using BigInteger for correctness.
+    /// Multiplies two values (cold-path BigInteger) and throws <see cref="OverflowException"/> if the result exceeds int256 range.
+    /// </summary>
+    public static int256 operator *(int256 left, int256 right) => MultiplyCold(left, right);
+
+    /// <summary>
+    /// Divides two values (cold-path BigInteger) and throws <see cref="DivideByZeroException"/> if divisor is zero.
     /// </summary>
     public static int256 operator /(int256 left, int256 right)
     {
         if (right.IsZero)
             throw new DivideByZeroException();
-        return (int256)((BigInteger)left / (BigInteger)right);
+
+        return DivideCold(left, right);
     }
 
     /// <summary>
-    /// Modulo using BigInteger for correctness.
+    /// Computes left modulo right (cold-path BigInteger) and throws <see cref="DivideByZeroException"/> if divisor is zero.
     /// </summary>
     public static int256 operator %(int256 left, int256 right)
     {
         if (right.IsZero)
             throw new DivideByZeroException();
-        return (int256)((BigInteger)left % (BigInteger)right);
+
+        return ModuloCold(left, right);
     }
-
-    /// <summary>
-    /// Increment.
-    /// </summary>
-    public static int256 operator ++(int256 value) => value + One;
-
-    /// <summary>
-    /// Decrement.
-    /// </summary>
-    public static int256 operator --(int256 value) => value - One;
-
-    /// <summary>
-    /// Returns the absolute value.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public int256 Abs() => IsNegative ? -this : this;
 
     #endregion
 
-    #region Bitwise Operators (SIMD Optimized)
+    #region Bitwise and Shifts
 
+    /// <summary>Bitwise AND.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int256 operator &(int256 left, int256 right)
-    {
-        if (Vector256.IsHardwareAccelerated)
-        {
-            var vLeft = Vector256.Create(left._u0, left._u1, left._u2, left._u3);
-            var vRight = Vector256.Create(right._u0, right._u1, right._u2, right._u3);
-            var result = vLeft & vRight;
-            return new int256(result[0], result[1], result[2], result[3]);
-        }
-        return new int256(
-            left._u0 & right._u0,
-            left._u1 & right._u1,
-            left._u2 & right._u2,
-            left._u3 & right._u3);
-    }
+        => new int256(left._u0 & right._u0, left._u1 & right._u1, left._u2 & right._u2, left._u3 & right._u3);
 
+    /// <summary>Bitwise OR.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int256 operator |(int256 left, int256 right)
-    {
-        if (Vector256.IsHardwareAccelerated)
-        {
-            var vLeft = Vector256.Create(left._u0, left._u1, left._u2, left._u3);
-            var vRight = Vector256.Create(right._u0, right._u1, right._u2, right._u3);
-            var result = vLeft | vRight;
-            return new int256(result[0], result[1], result[2], result[3]);
-        }
-        return new int256(
-            left._u0 | right._u0,
-            left._u1 | right._u1,
-            left._u2 | right._u2,
-            left._u3 | right._u3);
-    }
+        => new int256(left._u0 | right._u0, left._u1 | right._u1, left._u2 | right._u2, left._u3 | right._u3);
 
+    /// <summary>Bitwise XOR.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int256 operator ^(int256 left, int256 right)
-    {
-        if (Vector256.IsHardwareAccelerated)
-        {
-            var vLeft = Vector256.Create(left._u0, left._u1, left._u2, left._u3);
-            var vRight = Vector256.Create(right._u0, right._u1, right._u2, right._u3);
-            var result = vLeft ^ vRight;
-            return new int256(result[0], result[1], result[2], result[3]);
-        }
-        return new int256(
-            left._u0 ^ right._u0,
-            left._u1 ^ right._u1,
-            left._u2 ^ right._u2,
-            left._u3 ^ right._u3);
-    }
+        => new int256(left._u0 ^ right._u0, left._u1 ^ right._u1, left._u2 ^ right._u2, left._u3 ^ right._u3);
 
+    /// <summary>Bitwise NOT.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int256 operator ~(int256 value)
-    {
-        if (Vector256.IsHardwareAccelerated)
-        {
-            var v = Vector256.Create(value._u0, value._u1, value._u2, value._u3);
-            var result = ~v;
-            return new int256(result[0], result[1], result[2], result[3]);
-        }
-        return new int256(~value._u0, ~value._u1, ~value._u2, ~value._u3);
-    }
+        => new int256(~value._u0, ~value._u1, ~value._u2, ~value._u3);
 
     /// <summary>
-    /// Left shift.
+    /// Shifts the value left by a specified number of bits (logical shift).
     /// </summary>
     public static int256 operator <<(int256 value, int shift)
     {
@@ -528,133 +476,140 @@ public readonly struct int256 :
         if (shift == 0) return value;
         if (shift >= 256) return Zero;
 
-        if (shift >= 192)
+        int wholeLimbs = shift >> 6;
+        int bitShift = shift & 63;
+
+        ulong a0 = value._u0, a1 = value._u1, a2 = value._u2, a3 = value._u3;
+
+        if (bitShift == 0)
         {
-            return new int256(0, 0, 0, value._u0 << (shift - 192));
-        }
-        if (shift >= 128)
-        {
-            int s = shift - 128;
-            return new int256(
-                0, 0,
-                value._u0 << s,
-                (value._u1 << s) | (value._u0 >> (64 - s)));
-        }
-        if (shift >= 64)
-        {
-            int s = shift - 64;
-            return new int256(
-                0,
-                value._u0 << s,
-                (value._u1 << s) | (value._u0 >> (64 - s)),
-                (value._u2 << s) | (value._u1 >> (64 - s)));
+            return wholeLimbs switch
+            {
+                0 => value,
+                1 => new int256(0, a0, a1, a2),
+                2 => new int256(0, 0, a0, a1),
+                3 => new int256(0, 0, 0, a0),
+                _ => Zero
+            };
         }
 
-        return new int256(
-            value._u0 << shift,
-            (value._u1 << shift) | (value._u0 >> (64 - shift)),
-            (value._u2 << shift) | (value._u1 >> (64 - shift)),
-            (value._u3 << shift) | (value._u2 >> (64 - shift)));
+        int r = 64 - bitShift;
+
+        return wholeLimbs switch
+        {
+            0 => new int256(
+                a0 << bitShift,
+                (a1 << bitShift) | (a0 >> r),
+                (a2 << bitShift) | (a1 >> r),
+                (a3 << bitShift) | (a2 >> r)),
+            1 => new int256(
+                0,
+                a0 << bitShift,
+                (a1 << bitShift) | (a0 >> r),
+                (a2 << bitShift) | (a1 >> r)),
+            2 => new int256(
+                0,
+                0,
+                a0 << bitShift,
+                (a1 << bitShift) | (a0 >> r)),
+            3 => new int256(
+                0,
+                0,
+                0,
+                a0 << bitShift),
+            _ => Zero
+        };
     }
 
     /// <summary>
-    /// Arithmetic right shift (sign-extending).
+    /// Shifts the value right by a specified number of bits (arithmetic shift with sign extension).
     /// </summary>
     public static int256 operator >>(int256 value, int shift)
     {
         shift &= 255;
         if (shift == 0) return value;
 
-        // Sign-extended fill value
-        ulong fill = value.IsNegative ? ulong.MaxValue : 0;
-
         if (shift >= 256)
-            return new int256(fill, fill, fill, fill);
+            return value.IsNegative ? MinusOne : Zero;
 
-        if (shift >= 192)
+        int wholeLimbs = shift >> 6;
+        int bitShift = shift & 63;
+
+        ulong a0 = value._u0, a1 = value._u1, a2 = value._u2, a3 = value._u3;
+        ulong fill = value.IsNegative ? ulong.MaxValue : 0UL;
+
+        if (bitShift == 0)
         {
-            int s = shift - 192;
-            // Arithmetic shift the MSB
-            return new int256(
-                ((long)value._u3 >> s) < 0 ? (value._u3 >> s) | (ulong.MaxValue << (64 - s)) : value._u3 >> s,
-                fill, fill, fill);
-        }
-        if (shift >= 128)
-        {
-            int s = shift - 128;
-            return new int256(
-                (value._u2 >> s) | (value._u3 << (64 - s)),
-                (ulong)(((long)value._u3) >> s), // Arithmetic shift
-                fill, fill);
-        }
-        if (shift >= 64)
-        {
-            int s = shift - 64;
-            return new int256(
-                (value._u1 >> s) | (value._u2 << (64 - s)),
-                (value._u2 >> s) | (value._u3 << (64 - s)),
-                (ulong)(((long)value._u3) >> s),
-                fill);
+            return wholeLimbs switch
+            {
+                0 => value,
+                1 => new int256(a1, a2, a3, fill),
+                2 => new int256(a2, a3, fill, fill),
+                3 => new int256(a3, fill, fill, fill),
+                _ => value.IsNegative ? MinusOne : Zero
+            };
         }
 
-        return new int256(
-            (value._u0 >> shift) | (value._u1 << (64 - shift)),
-            (value._u1 >> shift) | (value._u2 << (64 - shift)),
-            (value._u2 >> shift) | (value._u3 << (64 - shift)),
-            (ulong)((long)value._u3 >> shift));
+        int r = 64 - bitShift;
+
+        return wholeLimbs switch
+        {
+            0 => new int256(
+                (a0 >> bitShift) | (a1 << r),
+                (a1 >> bitShift) | (a2 << r),
+                (a2 >> bitShift) | (a3 << r),
+                (a3 >> bitShift) | (fill << r)),
+            1 => new int256(
+                (a1 >> bitShift) | (a2 << r),
+                (a2 >> bitShift) | (a3 << r),
+                (a3 >> bitShift) | (fill << r),
+                fill),
+            2 => new int256(
+                (a2 >> bitShift) | (a3 << r),
+                (a3 >> bitShift) | (fill << r),
+                fill,
+                fill),
+            3 => new int256(
+                (a3 >> bitShift) | (fill << r),
+                fill,
+                fill,
+                fill),
+            _ => value.IsNegative ? MinusOne : Zero
+        };
     }
 
     #endregion
 
     #region Conversions
 
+    /// <summary>Implicit conversion from <see cref="long"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator int256(long value) => new(value);
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static implicit operator int256(int value) => new(value);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static implicit operator int256(short value) => new(value);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static implicit operator int256(sbyte value) => new(value);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static implicit operator int256(ulong value) => value > (ulong)long.MaxValue
-    ? throw new OverflowException("Value too large for implicit conversion")
-    : new int256(value, 0, 0, 0);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    /// <summary>Explicit conversion to <see cref="long"/> (throws if out of range).</summary>
     public static explicit operator long(int256 value)
     {
-        if (!value.FitsInLong)
-            throw new OverflowException("Value does not fit in long");
-        return (long)value._u0;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static explicit operator int256(uint256 value)
-    {
-        // Check if MSB is set (would be negative as int256)
-        Span<byte> bytes = stackalloc byte[32];
-        value.WriteBigEndian(bytes);
-        if ((bytes[0] & 0x80) != 0)
-            throw new OverflowException("uint256 value would be negative as int256");
-        return new int256(bytes);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static explicit operator uint256(int256 value)
-    {
         if (value.IsNegative)
-            throw new OverflowException("Cannot convert negative int256 to uint256");
-        return new uint256(value._u0, value._u1, value._u2, value._u3);
+        {
+            // Must fit in signed 64-bit. Sign extension for limbs must be all 1s and top bits must match.
+            if (value._u3 != ulong.MaxValue || value._u2 != ulong.MaxValue || value._u1 != ulong.MaxValue)
+                throw new OverflowException("Value is out of range for long.");
+
+            return unchecked((long)value._u0);
+        }
+        else
+        {
+            if (value._u3 != 0 || value._u2 != 0 || value._u1 != 0)
+                throw new OverflowException("Value is out of range for long.");
+
+            return unchecked((long)value._u0);
+        }
     }
 
     /// <summary>
-    /// Converts to BigInteger.
+    /// Converts this value to a signed <see cref="BigInteger"/> (cold-path helper).
     /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public BigInteger ToBigInteger()
     {
         Span<byte> bytes = stackalloc byte[32];
@@ -662,30 +617,29 @@ public readonly struct int256 :
         return new BigInteger(bytes, isUnsigned: false, isBigEndian: true);
     }
 
+    /// <summary>Implicit conversion to <see cref="BigInteger"/> (cold-path).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator BigInteger(int256 value) => value.ToBigInteger();
 
     /// <summary>
-    /// Converts BigInteger to int256.
+    /// Converts a signed <see cref="BigInteger"/> to <see cref="int256"/> (throws if out of int256 range).
     /// </summary>
     public static explicit operator int256(BigInteger value)
     {
-        int byteCount = value.GetByteCount(isUnsigned: false);
-        if (byteCount > 32)
-            throw new OverflowException("BigInteger value exceeds 256 bits");
+        if (value.IsZero)
+            return Zero;
 
-        Span<byte> bytes = stackalloc byte[32];
-        
-        // Sign-extend
-        if (value.Sign < 0)
-            bytes.Fill(0xFF);
-        else
-            bytes.Clear();
+        if (value.Sign > 0)
+        {
+            if (!TryConvertPositiveBigInteger(value, out int256 pos))
+                throw new OverflowException("BigInteger is out of range for int256.");
+            return pos;
+        }
 
-        if (!value.TryWriteBytes(bytes.Slice(32 - byteCount), out _, isUnsigned: false, isBigEndian: true))
-            throw new OverflowException("Failed to convert BigInteger to int256");
-
-        return new int256(bytes);
+        // Negative
+        if (!TryConvertNegativeBigInteger(value, out int256 neg))
+            throw new OverflowException("BigInteger is out of range for int256.");
+        return neg;
     }
 
     #endregion
@@ -693,246 +647,235 @@ public readonly struct int256 :
     #region Parsing
 
     /// <summary>
-    /// Parses a hexadecimal string (with or without 0x prefix).
-    /// Supports negative values with leading '-'.
+    /// Parses a string into an <see cref="int256"/> using the provided format provider.
+    /// Supports:
+    /// - Hex with optional "0x" prefix (two's complement if 64 hex digits; otherwise treated as positive magnitude)
+    /// - Decimal with optional leading '-' sign
     /// </summary>
-
-    public static int256 Parse(ReadOnlySpan<byte> utf8)
-    {
-        if (!TryParse(utf8, out var value))
-            throw new FormatException("Invalid int256 JSON-RPC value");
-        return value;
-    }
-
-    public static int256 Parse(ReadOnlySpan<char> hex)
-    {
-        bool negative = false;
-        if (hex.Length > 0 && hex[0] == '-')
-        {
-            negative = true;
-            hex = hex.Slice(1);
-        }
-
-        if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-            hex = hex.Slice(2);
-
-        if (hex.Length == 0)
-            return Zero;
-
-        if (hex.Length > 64)
-            throw new FormatException("Hex string too long for int256");
-
-        //// Parse as unsigned first
-        //if (!uint256.TryParse(hex, out var unsigned))
-        //    throw new FormatException("Invalid hex string");
-
-        //var result = new int256(unsigned._GetU0(), unsigned._GetU1(), unsigned._GetU2(), unsigned._GetU3());
-        //return negative ? -result : result;
-        return Parse(hex, CultureInfo.InvariantCulture);
-    }
-
-    public static int256 Parse(string hex) => Parse(hex.AsSpan(), CultureInfo.InvariantCulture);
-
-    public static int256 Parse(ReadOnlySpan<char> s, IFormatProvider? provider)
-    {
-        if (TryParse(s, provider, out var result))
-        {
-            return result;
-        }
-
-        throw new FormatException("Invalid hexadecimal string");
-    }
     public static int256 Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), provider);
 
     /// <summary>
-    /// Tries to parse a hexadecimal string without exceptions.
+    /// Parses a span into an <see cref="int256"/> using the provided format provider.
     /// </summary>
+    public static int256 Parse(ReadOnlySpan<char> s, IFormatProvider? provider)
+    {
+        if (TryParse(s, provider, out int256 result))
+            return result;
 
+        throw new FormatException("Invalid int256 value.");
+    }
+
+    /// <summary>
+    /// Parses a string into an <see cref="int256"/> using invariant culture.
+    /// </summary>
+    public static int256 Parse(string s) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Parses a span into an <see cref="int256"/> using invariant culture.
+    /// </summary>
+    public static int256 Parse(ReadOnlySpan<char> s) => Parse(s, CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Tries to parse a string into an <see cref="int256"/>.
+    /// </summary>
+    public static bool TryParse([NotNullWhen(true)] string? s, IFormatProvider? provider, out int256 result)
+        => TryParse(s.AsSpanSafe(), provider, out result);
+
+    /// <summary>
+    /// Tries to parse a span into an <see cref="int256"/> using the provided format provider.
+    /// </summary>
+    public static bool TryParse(ReadOnlySpan<char> s, IFormatProvider? provider, out int256 result)
+    {
+        s = ByteUtils.TrimWhitespace(s);
+        if (s.Length == 0)
+        {
+            result = Zero;
+            return false;
+        }
+
+        if (!ByteUtils.TryTrimLeadingSign(s, out bool isNegativePrefix, out ReadOnlySpan<char> unsignedSpan))
+        {
+            result = Zero;
+            return false;
+        }
+
+        if (ByteUtils.TryTrimHexPrefix(unsignedSpan, out ReadOnlySpan<char> hexDigits))
+        {
+            // Accept "0x" as zero.
+            if (hexDigits.Length == 0)
+            {
+                result = Zero;
+                return true;
+            }
+
+            if (hexDigits.Length > 64)
+            {
+                result = Zero;
+                return false;
+            }
+
+            if (!ByteUtils.TryParseUInt256HexChars(hexDigits, out ulong u0, out ulong u1, out ulong u2, out ulong u3))
+            {
+                result = Zero;
+                return false;
+            }
+
+            if (isNegativePrefix)
+            {
+                // Interpret as magnitude, then negate into two's complement.
+                if (!IsMagnitudeWithinInt256NegativeRange(u0, u1, u2, u3))
+                {
+                    result = Zero;
+                    return false;
+                }
+
+                if ((u0 | u1 | u2 | u3) == 0)
+                {
+                    result = Zero;
+                    return true;
+                }
+
+                ByteUtils.NegateTwosComplement256(u0, u1, u2, u3, out ulong r0, out ulong r1, out ulong r2, out ulong r3);
+                result = new int256(r0, r1, r2, r3);
+                return true;
+            }
+
+            // No '-' prefix:
+            // - If exactly 64 hex digits, interpret as raw two's complement (ABI-like), sign bit may be set.
+            // - If shorter, interpret as positive magnitude and require sign bit not set.
+            if (hexDigits.Length < 64 && (u3 & 0x8000_0000_0000_0000UL) != 0)
+            {
+                result = Zero;
+                return false; // positive magnitude overflow
+            }
+
+            result = new int256(u0, u1, u2, u3);
+            return true;
+        }
+
+        // Decimal parsing: magnitude parsed as unsigned; apply sign.
+        if (!ByteUtils.TryParseUInt256DecimalChars(unsignedSpan, out ulong d0, out ulong d1, out ulong d2, out ulong d3))
+        {
+            result = Zero;
+            return false;
+        }
+
+        if (!isNegativePrefix)
+        {
+            // Positive range: sign bit must be 0.
+            if ((d3 & 0x8000_0000_0000_0000UL) != 0)
+            {
+                result = Zero;
+                return false;
+            }
+
+            result = new int256(d0, d1, d2, d3);
+            return true;
+        }
+
+        // Negative range: magnitude must be <= 2^255.
+        if (!IsMagnitudeWithinInt256NegativeRange(d0, d1, d2, d3))
+        {
+            result = Zero;
+            return false;
+        }
+
+        if ((d0 | d1 | d2 | d3) == 0)
+        {
+            result = Zero; // allow "-0"
+            return true;
+        }
+
+        ByteUtils.NegateTwosComplement256(d0, d1, d2, d3, out ulong n0, out ulong n1, out ulong n2, out ulong n3);
+        result = new int256(n0, n1, n2, n3);
+        return true;
+    }
+
+    /// <summary>
+    /// Tries to parse a UTF-8 encoded JSON token into an <see cref="int256"/>.
+    /// Supports optional surrounding quotes and:
+    /// - Hex with optional "0x" prefix
+    /// - Decimal with optional leading '-' sign
+    /// </summary>
     public static bool TryParse(ReadOnlySpan<byte> utf8, out int256 value)
     {
         value = Zero;
 
-        if (utf8.Length == 0)
-            return true;
+        utf8 = ByteUtils.TrimAsciiWhitespaceUtf8(utf8);
 
-        // Trim surrounding quotes if present
+        // Optional surrounding quotes.
         if (utf8.Length >= 2 && utf8[0] == (byte)'"' && utf8[^1] == (byte)'"')
-            utf8 = utf8.Slice(1, utf8.Length - 2);
-
-        if (utf8.Length == 0)
-            return true;
-
-        // Detect sign
-        bool negative = false;
-        if (utf8[0] == (byte)'-')
         {
-            negative = true;
-            utf8 = utf8.Slice(1);
-            if (utf8.Length == 0)
-                return false;
+            utf8 = utf8.Slice(1, utf8.Length - 2);
+            utf8 = ByteUtils.TrimAsciiWhitespaceUtf8(utf8);
         }
 
-        // ---------- EVM hex path ----------
-        if (utf8.Length >= 2 && utf8[0] == (byte)'0' && (utf8[1] | 0x20) == (byte)'x')
+        if (utf8.Length == 0)
+            return false;
+
+        if (!ByteUtils.TryTrimLeadingSignUtf8(utf8, out bool isNegativePrefix, out ReadOnlySpan<byte> unsignedSpan))
+            return false;
+
+        if (ByteUtils.TryTrimHexPrefixUtf8(unsignedSpan, out ReadOnlySpan<byte> hexDigits))
         {
-            utf8 = utf8.Slice(2);
-            if (utf8.Length == 0)
+            if (hexDigits.Length == 0)
             {
                 value = Zero;
                 return true;
             }
 
-            if (utf8.Length > 64)
+            if (hexDigits.Length > 64)
                 return false;
 
-            ulong u0 = 0, u1 = 0, u2 = 0, u3 = 0;
+            if (!ByteUtils.TryParseUInt256HexUtf8(hexDigits, out ulong u0, out ulong u1, out ulong u2, out ulong u3))
+                return false;
 
-            int limb = 0;
-            ulong acc = 0;
-            int shift = 0;
-
-            // Parse from least-significant nibble
-            for (int i = utf8.Length - 1; i >= 0; i--)
+            if (isNegativePrefix)
             {
-                int n = ByteUtils.ParseHexNibbleUtf8(utf8[i]);
-                if (n < 0)
+                if (!IsMagnitudeWithinInt256NegativeRange(u0, u1, u2, u3))
                     return false;
 
-                acc |= (ulong)n << shift;
-                shift += 4;
-
-                if (shift == 64)
+                if ((u0 | u1 | u2 | u3) == 0)
                 {
-                    switch (limb)
-                    {
-                        case 0: u0 = acc; break;
-                        case 1: u1 = acc; break;
-                        case 2: u2 = acc; break;
-                        case 3: u3 = acc; break;
-                        default: return false;
-                    }
-                    limb++;
-                    acc = 0;
-                    shift = 0;
+                    value = Zero;
+                    return true;
                 }
+
+                ByteUtils.NegateTwosComplement256(u0, u1, u2, u3, out ulong r0, out ulong r1, out ulong r2, out ulong r3);
+                value = new int256(r0, r1, r2, r3);
+                return true;
             }
 
-            if (shift != 0)
-            {
-                switch (limb)
-                {
-                    case 0: u0 = acc; break;
-                    case 1: u1 = acc; break;
-                    case 2: u2 = acc; break;
-                    case 3: u3 = acc; break;
-                    default: return false;
-                }
-            }
-
-            var result = new int256(u0, u1, u2, u3);
-            value = negative ? -result : result;
-            return true;
-        }
-
-        // ---------- Decimal path (Solana + generic JSON-RPC) ----------
-        BigInteger big = BigInteger.Zero;
-
-        for (int i = 0; i < utf8.Length; i++)
-        {
-            byte c = utf8[i];
-            if ((uint)(c - '0') > 9)
+            if (hexDigits.Length < 64 && (u3 & 0x8000_0000_0000_0000UL) != 0)
                 return false;
 
-            big = big * 10 + (c - '0');
-            if (big.GetByteCount(isUnsigned: false) > 32)
+            value = new int256(u0, u1, u2, u3);
+            return true;
+        }
+
+        if (!ByteUtils.TryParseUInt256DecimalUtf8(unsignedSpan, out ulong d0, out ulong d1, out ulong d2, out ulong d3))
+            return false;
+
+        if (!isNegativePrefix)
+        {
+            if ((d3 & 0x8000_0000_0000_0000UL) != 0)
                 return false;
-        }
 
-        if (negative)
-            big = -big;
-
-        value = (int256)big;
-        return true;
-    }
-
-
-    public static bool TryParse(ReadOnlySpan<char> hex, out int256 result)
-    {
-        result = Zero;
-
-        bool negative = false;
-        if (hex.Length > 0 && hex[0] == '-')
-        {
-            negative = true;
-            hex = hex.Slice(1);
-        }
-
-        if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-            hex = hex.Slice(2);
-
-        if (hex.Length == 0)
+            value = new int256(d0, d1, d2, d3);
             return true;
-
-        if (hex.Length > 64)
-            return false;
-
-        //if (!uint256.TryParse(hex, Utils.Uint256.UInt256ParseMode.DecimalUnsigned, out var unsigned))
-        //    return false;
-
-        //result = new int256(unsigned._GetU0(), unsigned._GetU1(), unsigned._GetU2(), unsigned._GetU3());
-        //if (negative)
-        //    result = -result;
-
-        return true;
-    }
-
-    public static bool TryParse(string? hex, out int256 result)
-    {
-        if (string.IsNullOrEmpty(hex))
-        {
-            result = Zero;
-            return false;
         }
-        return TryParse(hex.AsSpan(), out result);
-    }
 
-    public static bool TryParse(ReadOnlySpan<char> s, IFormatProvider? provider, out int256 result)
-        => TryParse(s, out result);
+        if (!IsMagnitudeWithinInt256NegativeRange(d0, d1, d2, d3))
+            return false;
 
-    public static bool TryParse([NotNullWhen(true)] string? s, IFormatProvider? provider, out int256 result)
-        => TryParse(s, out result);
-
-    /// <summary>
-    /// Parses a decimal string.
-    /// </summary>
-    public static int256 ParseDecimal(ReadOnlySpan<char> value)
-    {
-        if (value.Length == 0)
-            return Zero;
-
-        if (!BigInteger.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var bigInt))
-            throw new FormatException("Invalid decimal string");
-
-        return (int256)bigInt;
-    }
-
-    /// <summary>
-    /// Tries to parse a decimal string.
-    /// </summary>
-    public static bool TryParseDecimal(ReadOnlySpan<char> value, out int256 result)
-    {
-        result = Zero;
-
-        if (value.Length == 0)
+        if ((d0 | d1 | d2 | d3) == 0)
+        {
+            value = Zero;
             return true;
+        }
 
-        if (!BigInteger.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var bigInt))
-            return false;
-
-        if (bigInt.GetByteCount(isUnsigned: false) > 32)
-            return false;
-
-        result = (int256)bigInt;
+        ByteUtils.NegateTwosComplement256(d0, d1, d2, d3, out ulong n0, out ulong n1, out ulong n2, out ulong n3);
+        value = new int256(n0, n1, n2, n3);
         return true;
     }
 
@@ -940,67 +883,221 @@ public readonly struct int256 :
 
     #region Formatting
 
-    public override string ToString() => ToString(null, null);
+    #region Decimal Parsing
 
     /// <summary>
-    /// Formats the value according to the format string.
-    /// "x" or "X" for hex without prefix, "0x" for hex with prefix (default), "d" for decimal.
+    /// Tries to parse a signed decimal string into an <see cref="int256"/> without throwing.
+    /// Accepts an optional leading '+' or '-' sign and ignores leading/trailing whitespace.
     /// </summary>
-    public string ToString(string? format, IFormatProvider? formatProvider = null)
+    /// <param name="s">The input string containing a signed decimal value.</param>
+    /// <param name="result">The parsed <see cref="int256"/> if successful; otherwise <see cref="Zero"/>.</param>
+    /// <returns>True if parsing succeeded; otherwise false.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParseDecimal([NotNullWhen(true)] string? s, out int256 result)
     {
-        format ??= "0x";
-
-        if (format == "D" || format == "d")
+        if (s is null)
         {
-            return ToBigInteger().ToString(CultureInfo.InvariantCulture);
-        }
-
-        bool withPrefix = format == "0x" || format == "0X";
-        bool uppercase = format == "X" || format == "0X";
-
-        if (IsNegative)
-        {
-            var abs = Abs();
-            string hex = abs.ToHexStringInternal(uppercase);
-            return withPrefix ? "-0x" + hex : "-" + hex;
-        }
-
-        string hexStr = ToHexStringInternal(uppercase);
-        return withPrefix ? "0x" + hexStr : hexStr;
-    }
-
-    private string ToHexStringInternal(bool uppercase)
-    {
-        if (IsZero) return "0";
-
-        string fmt = uppercase ? "X" : "x";
-        string fmt16 = uppercase ? "X16" : "x16";
-
-        if (_u3 == 0 && _u2 == 0 && _u1 == 0)
-            return _u0.ToString(fmt, CultureInfo.InvariantCulture);
-        if (_u3 == 0 && _u2 == 0)
-            return $"{_u1.ToString(fmt, CultureInfo.InvariantCulture)}{_u0.ToString(fmt16, CultureInfo.InvariantCulture)}";
-        if (_u3 == 0)
-            return $"{_u2.ToString(fmt, CultureInfo.InvariantCulture)}{_u1.ToString(fmt16, CultureInfo.InvariantCulture)}{_u0.ToString(fmt16, CultureInfo.InvariantCulture)}";
-        return $"{_u3.ToString(fmt, CultureInfo.InvariantCulture)}{_u2.ToString(fmt16, CultureInfo.InvariantCulture)}{_u1.ToString(fmt16, CultureInfo.InvariantCulture)}{_u0.ToString(fmt16, CultureInfo.InvariantCulture)}";
-    }
-
-    public bool TryFormat(Span<char> destination, out int charsWritten, ReadOnlySpan<char> format = default, IFormatProvider? provider = null)
-    {
-        string str = ToString(format.Length == 0 ? null : new string(format), provider);
-        if (str.Length > destination.Length)
-        {
-            charsWritten = 0;
+            result = Zero;
             return false;
         }
-        str.AsSpan().CopyTo(destination);
-        charsWritten = str.Length;
+
+        return TryParseDecimal(s.AsSpan(), out result);
+    }
+
+    /// <summary>
+    /// Tries to parse a signed decimal span into an <see cref="int256"/> without throwing.
+    /// Accepts an optional leading '+' or '-' sign and ignores leading/trailing whitespace.
+    /// </summary>
+    /// <param name="s">The input span containing a signed decimal value.</param>
+    /// <param name="result">The parsed <see cref="int256"/> if successful; otherwise <see cref="Zero"/>.</param>
+    /// <returns>True if parsing succeeded; otherwise false.</returns>
+    public static bool TryParseDecimal(ReadOnlySpan<char> s, out int256 result)
+    {
+        result = Zero;
+
+        s = ByteUtils.TrimWhitespace(s);
+        if (s.Length == 0)
+            return false;
+
+        if (!ByteUtils.TryTrimLeadingSign(s, out bool isNegativePrefix, out ReadOnlySpan<char> unsignedSpan))
+            return false;
+
+        unsignedSpan = ByteUtils.TrimWhitespace(unsignedSpan);
+        if (unsignedSpan.Length == 0)
+            return false;
+
+        if (!ByteUtils.TryParseUInt256DecimalChars(unsignedSpan, out ulong u0, out ulong u1, out ulong u2, out ulong u3))
+            return false;
+
+        if (!isNegativePrefix)
+        {
+            // Positive int256 must be <= 2^255 - 1 (sign bit must be 0).
+            if ((u3 & 0x8000_0000_0000_0000UL) != 0)
+                return false;
+
+            result = new int256(u0, u1, u2, u3);
+            return true;
+        }
+
+        // Negative magnitude must be <= 2^255 (allow exactly 2^255 -> MinValue).
+        if (!IsMagnitudeWithinInt256NegativeRange(u0, u1, u2, u3))
+            return false;
+
+        // Allow "-0" as 0.
+        if ((u0 | u1 | u2 | u3) == 0)
+        {
+            result = Zero;
+            return true;
+        }
+
+        ByteUtils.NegateTwosComplement256(u0, u1, u2, u3, out ulong r0, out ulong r1, out ulong r2, out ulong r3);
+        result = new int256(r0, r1, r2, r3);
         return true;
     }
 
+    #endregion
+
+    /// <summary>
+    /// Returns the default string representation (decimal, signed).
+    /// </summary>
+    public override string ToString() => ToString("D", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Formats the value as a string using:
+    /// - "D" / "d": signed decimal (cold-path BigInteger conversion)
+    /// - "0x" / "0X": hex with prefix (positive: minimal magnitude, negative: full 64-digit two's complement)
+    /// - "x" / "X": hex without prefix (positive: minimal magnitude, negative: full 64-digit two's complement)
+    /// </summary>
+    public string ToString(string? format, IFormatProvider? formatProvider)
+    {
+        format ??= "D";
+
+        Span<char> buffer = stackalloc char[80];
+        if (!TryFormat(buffer, out int written, format.AsSpan(), formatProvider))
+            throw new FormatException($"Unable to format int256 using format '{format}'.");
+
+        return new string(buffer.Slice(0, written));
+    }
+
+    /// <summary>
+    /// Attempts to format the value into the destination character span.
+    /// </summary>
+    public bool TryFormat(Span<char> destination, out int charsWritten, ReadOnlySpan<char> format = default, IFormatProvider? provider = null)
+    {
+        charsWritten = 0;
+
+        if (format.Length == 0)
+            format = "D".AsSpan();
+
+        bool decimalFormat = format.Length == 1 && (format[0] == 'd' || format[0] == 'D');
+        if (decimalFormat)
+        {
+            // Cold path: decimal formatting uses BigInteger conversion.
+            return ToBigInteger().TryFormat(destination, out charsWritten, default, provider);
+        }
+
+        bool withPrefix = format.Length == 2 && format[0] == '0' && (format[1] == 'x' || format[1] == 'X');
+        bool uppercase = (format.Length == 1 && format[0] == 'X') || (format.Length == 2 && format[1] == 'X');
+        bool hexNoPrefixLower = format.Length == 1 && format[0] == 'x';
+        bool hexNoPrefixUpper = format.Length == 1 && format[0] == 'X';
+
+        if (!(withPrefix || hexNoPrefixLower || hexNoPrefixUpper))
+            return false;
+
+        int pos = 0;
+        if (withPrefix)
+        {
+            if (destination.Length < 2)
+                return false;
+
+            destination[pos++] = '0';
+            destination[pos++] = uppercase ? 'X' : 'x';
+        }
+
+        if (IsNegative)
+        {
+            // Negative hex is emitted as full-width two's complement to avoid ambiguity.
+            if (destination.Length - pos < 64)
+                return false;
+
+            ByteUtils.WriteHexUInt64(destination.Slice(pos + 0, 16), _u3, uppercase);
+            ByteUtils.WriteHexUInt64(destination.Slice(pos + 16, 16), _u2, uppercase);
+            ByteUtils.WriteHexUInt64(destination.Slice(pos + 32, 16), _u1, uppercase);
+            ByteUtils.WriteHexUInt64(destination.Slice(pos + 48, 16), _u0, uppercase);
+
+            charsWritten = pos + 64;
+            return true;
+        }
+
+        // Positive: minimal hex, grouped by limbs like uint256.
+        ReadOnlySpan<char> fmtVar = uppercase ? "X" : "x";
+        ReadOnlySpan<char> fmt16 = uppercase ? "X16" : "x16";
+
+        if (_u3 == 0 && _u2 == 0 && _u1 == 0)
+        {
+            if (!_u0.TryFormat(destination.Slice(pos), out int w0, fmtVar, provider))
+                return false;
+
+            charsWritten = pos + w0;
+            return true;
+        }
+
+        if (_u3 == 0 && _u2 == 0)
+        {
+            if (!_u1.TryFormat(destination.Slice(pos), out int w1, fmtVar, provider))
+                return false;
+            pos += w1;
+
+            if (!_u0.TryFormat(destination.Slice(pos), out int w0, fmt16, provider))
+                return false;
+
+            charsWritten = pos + w0;
+            return true;
+        }
+
+        if (_u3 == 0)
+        {
+            if (!_u2.TryFormat(destination.Slice(pos), out int w2, fmtVar, provider))
+                return false;
+            pos += w2;
+
+            if (!_u1.TryFormat(destination.Slice(pos), out int w1, fmt16, provider))
+                return false;
+            pos += w1;
+
+            if (!_u0.TryFormat(destination.Slice(pos), out int w0, fmt16, provider))
+                return false;
+
+            charsWritten = pos + w0;
+            return true;
+        }
+
+        if (!_u3.TryFormat(destination.Slice(pos), out int w3, fmtVar, provider))
+            return false;
+        pos += w3;
+
+        if (!_u2.TryFormat(destination.Slice(pos), out int w2f, fmt16, provider))
+            return false;
+        pos += w2f;
+
+        if (!_u1.TryFormat(destination.Slice(pos), out int w1f, fmt16, provider))
+            return false;
+        pos += w1f;
+
+        if (!_u0.TryFormat(destination.Slice(pos), out int w0f, fmt16, provider))
+            return false;
+
+        charsWritten = pos + w0f;
+        return true;
+    }
+
+    /// <summary>
+    /// Attempts to format the value into a UTF-8 destination span.
+    /// Output is ASCII-compatible for supported formats.
+    /// </summary>
     public bool TryFormat(Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format = default, IFormatProvider? provider = null)
     {
-        Span<char> buffer = stackalloc char[80]; // Max: "-0x" + 64 hex
+        Span<char> buffer = stackalloc char[80];
         if (!TryFormat(buffer, out int charsWritten, format, provider))
         {
             bytesWritten = 0;
@@ -1020,72 +1117,136 @@ public readonly struct int256 :
         return true;
     }
 
-    /// <summary>
-    /// Returns the decimal string representation.
-    /// </summary>
-    public string ToDecimalString() => ToBigInteger().ToString(CultureInfo.InvariantCulture);
-
     #endregion
 
-    #region EVM/Solana Helpers
+    #region Private Helpers
 
     /// <summary>
-    /// Returns the value as a 32-byte ABI-encoded value (big-endian, two's complement).
+    /// Returns true if an unsigned magnitude (u0..u3) is within the allowed magnitude range for negative int256:
+    /// magnitude must be <= 2^255 (0x8000..00).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public byte[] ToAbiEncoded() => ToBigEndianBytes();
-
-    /// <summary>
-    /// Parses an ABI-encoded int256 value.
-    /// </summary>
-    public static int256 FromAbiEncoded(ReadOnlySpan<byte> data)
+    private static bool IsMagnitudeWithinInt256NegativeRange(ulong u0, ulong u1, ulong u2, ulong u3)
     {
-        if (data.Length < 32)
-            throw new ArgumentException("ABI encoded int256 requires 32 bytes", nameof(data));
-        return new int256(data.Slice(0, 32));
+        const ulong LimitHi = 0x8000_0000_0000_0000UL;
+
+        if (u3 < LimitHi)
+            return true;
+
+        if (u3 > LimitHi)
+            return false;
+
+        // If u3 == 0x8000.. then remaining limbs must be 0 for exactly 2^255.
+        return (u2 | u1 | u0) == 0;
     }
 
-    /// <summary>
-    /// Converts to EVM-style minimal hex string.
-    /// </summary>
-    public string ToEvmHex() => ToString("0x", CultureInfo.InvariantCulture);
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int256 MultiplyCold(int256 left, int256 right)
+    {
+        BigInteger r = (BigInteger)left * (BigInteger)right;
+        return (int256)r;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int256 DivideCold(int256 left, int256 right)
+    {
+        BigInteger q = (BigInteger)left / (BigInteger)right;
+        return (int256)q;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int256 ModuloCold(int256 left, int256 right)
+    {
+        BigInteger r = (BigInteger)left % (BigInteger)right;
+        return (int256)r;
+    }
+
+    private static bool TryConvertPositiveBigInteger(BigInteger value, out int256 result)
+    {
+        // value > 0
+        int byteCount = value.GetByteCount(isUnsigned: true);
+        if (byteCount > 32)
+        {
+            result = Zero;
+            return false;
+        }
+
+        Span<byte> bytes = stackalloc byte[32];
+        bytes.Clear();
+
+        if (!value.TryWriteBytes(bytes.Slice(32 - byteCount), out _, isUnsigned: true, isBigEndian: true))
+        {
+            result = Zero;
+            return false;
+        }
+
+        // Positive range: MSB must not set (<= 2^255 - 1).
+        if ((bytes[0] & 0x80) != 0)
+        {
+            result = Zero;
+            return false;
+        }
+
+        result = new int256(bytes);
+        return true;
+    }
+
+    private static bool TryConvertNegativeBigInteger(BigInteger value, out int256 result)
+    {
+        // value < 0
+        BigInteger magnitude = BigInteger.Negate(value); // positive
+        int byteCount = magnitude.GetByteCount(isUnsigned: true);
+        if (byteCount > 32)
+        {
+            result = Zero;
+            return false;
+        }
+
+        Span<byte> bytes = stackalloc byte[32];
+        bytes.Clear();
+
+        if (!magnitude.TryWriteBytes(bytes.Slice(32 - byteCount), out _, isUnsigned: true, isBigEndian: true))
+        {
+            result = Zero;
+            return false;
+        }
+
+        // Negative magnitude range: magnitude must be <= 2^255 exactly.
+        // If MSB > 0x80 => overflow. If MSB == 0x80 then all remaining bytes must be zero.
+        if (bytes[0] > 0x80)
+        {
+            result = Zero;
+            return false;
+        }
+
+        if (bytes[0] == 0x80)
+        {
+            for (int i = 1; i < 32; i++)
+            {
+                if (bytes[i] != 0)
+                {
+                    result = Zero;
+                    return false;
+                }
+            }
+        }
+
+        // Convert magnitude bytes to limbs, then negate into two's complement.
+        ulong u3 = BinaryPrimitives.ReadUInt64BigEndian(bytes);
+        ulong u2 = BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(8));
+        ulong u1 = BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(16));
+        ulong u0 = BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(24));
+
+        if ((u0 | u1 | u2 | u3) == 0)
+        {
+            result = Zero;
+            return true;
+        }
+
+        ByteUtils.NegateTwosComplement256(u0, u1, u2, u3, out ulong r0, out ulong r1, out ulong r2, out ulong r3);
+        result = new int256(r0, r1, r2, r3);
+        return true;
+    }
 
     #endregion
 }
-
-// Extension methods to access uint256 internals for int256 construction
-internal static class UInt256Extensions
-{
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ulong _GetU0(this uint256 value)
-    {
-        Span<byte> bytes = stackalloc byte[32];
-        value.WriteLittleEndian(bytes);
-        return BinaryPrimitives.ReadUInt64LittleEndian(bytes);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ulong _GetU1(this uint256 value)
-    {
-        Span<byte> bytes = stackalloc byte[32];
-        value.WriteLittleEndian(bytes);
-        return BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(8));
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ulong _GetU2(this uint256 value)
-    {
-        Span<byte> bytes = stackalloc byte[32];
-        value.WriteLittleEndian(bytes);
-        return BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(16));
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ulong _GetU3(this uint256 value)
-    {
-        Span<byte> bytes = stackalloc byte[32];
-        value.WriteLittleEndian(bytes);
-        return BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(24));
-    }
-}
-

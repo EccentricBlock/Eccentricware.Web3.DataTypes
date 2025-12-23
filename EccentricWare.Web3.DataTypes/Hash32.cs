@@ -3,7 +3,6 @@ using EccentricWare.Web3.DataTypes.Utils;
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -12,88 +11,80 @@ using System.Text.Json.Serialization;
 namespace EccentricWare.Web3.DataTypes;
 
 /// <summary>
-/// A 32-byte (256-bit) hash optimized for EVM and Solana blockchain operations.
-/// Uses 4 x 64-bit unsigned integers for minimal memory footprint (32 bytes).
-/// Immutable, equatable, and comparable for use as dictionary keys and sorting.
+/// A fixed-size 32-byte hash optimised for EVM and Solana.
+/// Internally stored as 4 x 64-bit unsigned limbs in big-endian limb order (u0 is the most significant limb),
+/// enabling fast equality, lexicographic ordering, and low-GC hot-path parsing/formatting.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 [JsonConverter(typeof(Hash32JsonConverter))]
-public readonly struct Hash32 : 
-    IEquatable<Hash32>, 
-    IComparable<Hash32>, 
+public readonly struct Hash32 :
+    IEquatable<Hash32>,
+    IComparable<Hash32>,
     IComparable,
     ISpanFormattable,
     ISpanParsable<Hash32>,
     IUtf8SpanFormattable
 {
-    /// <summary>
-    /// The size in bytes of a Hash32 value (32 bytes / 256 bits).
-    /// </summary>
+    /// <summary>The size in bytes of a <see cref="Hash32"/> value (32 bytes).</summary>
     public const int ByteLength = 32;
 
-    /// <summary>
-    /// The size in characters of a hex string without prefix.
-    /// </summary>
+    /// <summary>The number of hex characters required for a 32-byte hash without a prefix (64 characters).</summary>
     public const int HexLength = 64;
 
-    // Store as 4 x ulong (big-endian layout: _u0 is most significant for lexicographic comparison)
-    private readonly ulong _u0; // bytes 0-7 (most significant)
-    private readonly ulong _u1; // bytes 8-15
-    private readonly ulong _u2; // bytes 16-23
-    private readonly ulong _u3; // bytes 24-31 (least significant)
+    // Big-endian limb layout: _u0 is most-significant for lexicographic comparisons.
+    private readonly ulong _u0;
+    private readonly ulong _u1;
+    private readonly ulong _u2;
+    private readonly ulong _u3;
 
-    /// <summary>
-    /// The zero hash (all bytes are 0x00).
-    /// </summary>
+    /// <summary>The all-zero hash.</summary>
     public static readonly Hash32 Zero;
-
-    // Bitcoin / Solana Base58 alphabet
-    private static ReadOnlySpan<byte> Base58Alphabet => "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"u8;
 
     #region Constructors
 
     /// <summary>
-    /// Creates a Hash32 from 4 ulong values in big-endian order.
+    /// Creates a new hash from four 64-bit limbs in big-endian limb order.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Hash32(ulong u0, ulong u1, ulong u2, ulong u3)
+    public Hash32(ulong mostSignificantU0, ulong u1, ulong u2, ulong leastSignificantU3)
     {
-        _u0 = u0;
+        _u0 = mostSignificantU0;
         _u1 = u1;
         _u2 = u2;
-        _u3 = u3;
+        _u3 = leastSignificantU3;
     }
 
     /// <summary>
-    /// Creates a Hash32 from a 32-byte big-endian span.
-    /// Compatible with EVM transaction/block hashes.
+    /// Creates a hash from a 32-byte big-endian span.
     /// </summary>
+    /// <param name="bigEndianBytes">A 32-byte span whose first byte is the most significant byte.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Hash32(ReadOnlySpan<byte> bytes)
+    public Hash32(ReadOnlySpan<byte> bigEndianBytes)
     {
-        if (bytes.Length != ByteLength)
-            ThrowHelper.ThrowArgumentExceptionInvalidLength(nameof(bytes));
+        if ((uint)bigEndianBytes.Length != ByteLength)
+            ThrowHelper.ThrowArgumentExceptionInvalidLength(nameof(bigEndianBytes));
 
-        _u0 = BinaryPrimitives.ReadUInt64BigEndian(bytes);
-        _u1 = BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(8));
-        _u2 = BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(16));
-        _u3 = BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(24));
+        _u0 = BinaryPrimitives.ReadUInt64BigEndian(bigEndianBytes);
+        _u1 = BinaryPrimitives.ReadUInt64BigEndian(bigEndianBytes.Slice(8));
+        _u2 = BinaryPrimitives.ReadUInt64BigEndian(bigEndianBytes.Slice(16));
+        _u3 = BinaryPrimitives.ReadUInt64BigEndian(bigEndianBytes.Slice(24));
     }
 
     /// <summary>
-    /// Creates a Hash32 from a little-endian byte span.
-    /// Compatible with Solana encoding.
+    /// Creates a hash from a 32-byte little-endian span.
+    /// This is provided for interoperability with systems that serialise the bytes in reverse significance order.
     /// </summary>
+    /// <param name="littleEndianBytes">A 32-byte span whose first byte is the least significant byte.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Hash32 FromLittleEndian(ReadOnlySpan<byte> bytes)
+    public static Hash32 FromLittleEndian(ReadOnlySpan<byte> littleEndianBytes)
     {
-        if (bytes.Length != ByteLength)
-            ThrowHelper.ThrowArgumentExceptionInvalidLength(nameof(bytes));
+        if ((uint)littleEndianBytes.Length != ByteLength)
+            ThrowHelper.ThrowArgumentExceptionInvalidLength(nameof(littleEndianBytes));
 
-        ulong u3 = BinaryPrimitives.ReadUInt64LittleEndian(bytes);
-        ulong u2 = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(8));
-        ulong u1 = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(16));
-        ulong u0 = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(24));
+        ulong u3 = BinaryPrimitives.ReadUInt64LittleEndian(littleEndianBytes);
+        ulong u2 = BinaryPrimitives.ReadUInt64LittleEndian(littleEndianBytes.Slice(8));
+        ulong u1 = BinaryPrimitives.ReadUInt64LittleEndian(littleEndianBytes.Slice(16));
+        ulong u0 = BinaryPrimitives.ReadUInt64LittleEndian(littleEndianBytes.Slice(24));
         return new Hash32(u0, u1, u2, u3);
     }
 
@@ -102,13 +93,13 @@ public readonly struct Hash32 :
     #region Byte Conversions
 
     /// <summary>
-    /// Writes the hash as a 32-byte big-endian span.
-    /// Compatible with EVM encoding.
+    /// Writes the hash to a destination buffer as 32 big-endian bytes.
     /// </summary>
+    /// <param name="destination">Destination span that must be at least 32 bytes.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteBigEndian(Span<byte> destination)
     {
-        if (destination.Length < ByteLength)
+        if ((uint)destination.Length < ByteLength)
             ThrowHelper.ThrowArgumentExceptionDestinationTooSmall(nameof(destination));
 
         BinaryPrimitives.WriteUInt64BigEndian(destination, _u0);
@@ -118,13 +109,13 @@ public readonly struct Hash32 :
     }
 
     /// <summary>
-    /// Writes the hash as a 32-byte little-endian span.
-    /// Compatible with Solana encoding.
+    /// Writes the hash to a destination buffer as 32 little-endian bytes.
     /// </summary>
+    /// <param name="destination">Destination span that must be at least 32 bytes.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteLittleEndian(Span<byte> destination)
     {
-        if (destination.Length < ByteLength)
+        if ((uint)destination.Length < ByteLength)
             ThrowHelper.ThrowArgumentExceptionDestinationTooSmall(nameof(destination));
 
         BinaryPrimitives.WriteUInt64LittleEndian(destination, _u3);
@@ -134,7 +125,8 @@ public readonly struct Hash32 :
     }
 
     /// <summary>
-    /// Returns the hash as a 32-byte big-endian array.
+    /// Allocates and returns a new 32-byte big-endian array.
+    /// Intended for cold paths; prefer <see cref="WriteBigEndian(Span{byte})"/> for hot paths.
     /// </summary>
     public byte[] ToBigEndianBytes()
     {
@@ -144,7 +136,8 @@ public readonly struct Hash32 :
     }
 
     /// <summary>
-    /// Returns the hash as a 32-byte little-endian array.
+    /// Allocates and returns a new 32-byte little-endian array.
+    /// Intended for cold paths; prefer <see cref="WriteLittleEndian(Span{byte})"/> for hot paths.
     /// </summary>
     public byte[] ToLittleEndianBytes()
     {
@@ -155,35 +148,30 @@ public readonly struct Hash32 :
 
     #endregion
 
-    #region Equality (SIMD Optimized)
+    #region Equality / Hashing
 
     /// <summary>
-    /// Compares this hash for equality with another.
-    /// Uses SIMD when available for maximum performance.
+    /// Compares this hash to another hash for equality.
+    /// Scalar comparisons are typically optimal for single-value equality checks.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(Hash32 other)
-    {
-        // SIMD path for 256-bit comparison
-        if (Vector256.IsHardwareAccelerated)
-        {
-            var left = Vector256.Create(_u0, _u1, _u2, _u3);
-            var right = Vector256.Create(other._u0, other._u1, other._u2, other._u3);
-            return left.Equals(right);
-        }
+        => _u0 == other._u0 && _u1 == other._u1 && _u2 == other._u2 && _u3 == other._u3;
 
-        // Fallback: scalar comparison
-        return _u0 == other._u0 && _u1 == other._u1 && _u2 == other._u2 && _u3 == other._u3;
-    }
-
+    /// <inheritdoc />
     public override bool Equals(object? obj) => obj is Hash32 other && Equals(other);
 
+    /// <summary>
+    /// Computes a hash code suitable for dictionary/set usage.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override int GetHashCode() => HashCode.Combine(_u0, _u1, _u2, _u3);
 
+    /// <summary>Equality operator.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator ==(Hash32 left, Hash32 right) => left.Equals(right);
 
+    /// <summary>Inequality operator.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator !=(Hash32 left, Hash32 right) => !left.Equals(right);
 
@@ -192,7 +180,7 @@ public readonly struct Hash32 :
     #region Comparison
 
     /// <summary>
-    /// Lexicographic comparison (most significant to least significant bytes).
+    /// Lexicographic comparison using big-endian limb order (most significant limb first).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int CompareTo(Hash32 other)
@@ -204,6 +192,7 @@ public readonly struct Hash32 :
         return 0;
     }
 
+    /// <inheritdoc />
     public int CompareTo(object? obj)
     {
         if (obj is null) return 1;
@@ -211,477 +200,29 @@ public readonly struct Hash32 :
         throw new ArgumentException($"Object must be of type {nameof(Hash32)}", nameof(obj));
     }
 
+    /// <summary>Less-than operator.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator <(Hash32 left, Hash32 right) => left.CompareTo(right) < 0;
 
+    /// <summary>Greater-than operator.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator >(Hash32 left, Hash32 right) => left.CompareTo(right) > 0;
 
+    /// <summary>Less-than-or-equal operator.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator <=(Hash32 left, Hash32 right) => left.CompareTo(right) <= 0;
 
+    /// <summary>Greater-than-or-equal operator.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator >=(Hash32 left, Hash32 right) => left.CompareTo(right) >= 0;
-
-    #endregion
-
-    #region Parsing
-
-
-    /// <summary>
-    /// Parses a 64-character hexadecimal string (with or without 0x prefix).
-    /// Uses direct nibble parsing for maximum performance.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Hash32 Parse(ReadOnlySpan<char> hex)
-    {
-        if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-            hex = hex.Slice(2);
-
-        if (hex.Length != HexLength)
-            ThrowHelper.ThrowFormatExceptionInvalidHexLength();
-
-        ulong u0 = ByteUtils.ParseHexUInt64(hex.Slice(0, 16));
-        ulong u1 = ByteUtils.ParseHexUInt64(hex.Slice(16, 16));
-        ulong u2 = ByteUtils.ParseHexUInt64(hex.Slice(32, 16));
-        ulong u3 = ByteUtils.ParseHexUInt64(hex.Slice(48, 16));
-
-        return new Hash32(u0, u1, u2, u3);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-
-    public static Hash32 Parse(ReadOnlySpan<byte> hexUtf8)
-    {
-        if (TryParse(hexUtf8, out var result))
-        {
-            return result;
-        }
-
-        throw new FormatException("Invalid hexadecimal string");
-    }
-
-    /// <summary>
-    /// Parses a Base58-encoded UTF-8 span into a <see cref="Hash32"/>.
-    /// Canonical Solana encoding for signatures and hashes.
-    /// Zero-allocation; rejects non-32-byte decoded payloads.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Hash32 ParseBase58(ReadOnlySpan<byte> utf8)
-    {
-        if (TryParseBase58(utf8, out var value))
-            return value;
-
-        ThrowHelper.ThrowFormatExceptionInvalidBase58();
-        return default; // unreachable
-    }
-
-    /// <summary>
-    /// Parses a Base64-encoded UTF-8 span into a <see cref="Hash32"/>.
-    /// Supports standard and URL-safe Base64.
-    /// Zero-allocation; rejects non-32-byte decoded payloads.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Hash32 ParseBase64(ReadOnlySpan<byte> utf8)
-    {
-        if (TryParseBase64(utf8, out var value))
-            return value;
-
-        ThrowHelper.ThrowFormatExceptionInvalidBase64();
-        return default; // unreachable
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Hash32 Parse(string hex) => Parse(hex.AsSpan(), CultureInfo.InvariantCulture);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Hash32 Parse(ReadOnlySpan<char> s, IFormatProvider? provider)
-    {
-        if (TryParse(s, provider, out var result))
-        {
-            return result;
-        }
-
-        throw new FormatException("Invalid hexadecimal string");
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Hash32 Parse(string s, IFormatProvider? provider) => Parse(s.AsSpan(), CultureInfo.InvariantCulture);
-
-    /// <summary>
-    /// Tries to parse a JSON-RPC UTF-8 value into a <see cref="Hash32"/> without allocations.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool TryParse(ReadOnlySpan<byte> utf8, out Hash32 result)
-    {
-        result = Zero;
-
-        if (utf8.IsEmpty)
-            return false;
-
-        // Fast-path: raw 32-byte hash (e.g. Solana internal / binary transports)
-        if (utf8.Length == ByteLength)
-        {
-            result = new Hash32(utf8);
-            return true;
-        }
-
-        // Optional 0x / 0X prefix (EVM JSON-RPC)
-        if (utf8.Length >= 2 && utf8[0] == (byte)'0' && (utf8[1] | 0x20) == (byte)'x')
-            utf8 = utf8.Slice(2);
-
-        if (utf8.Length != HexLength)
-            return false;
-
-        // Parse 64 hex nibbles -> 4 x ulong (big-endian)
-        if (!ByteUtils.TryParseHexUInt64Utf8Variable(utf8.Slice(0, 16), out ulong u0)) return false;
-        if (!ByteUtils.TryParseHexUInt64Utf8Variable(utf8.Slice(16, 16), out ulong u1)) return false;
-        if (!ByteUtils.TryParseHexUInt64Utf8Variable(utf8.Slice(32, 16), out ulong u2)) return false;
-        if (!ByteUtils.TryParseHexUInt64Utf8Variable(utf8.Slice(48, 16), out ulong u3)) return false;
-
-        result = new Hash32(u0, u1, u2, u3);
-        return true;
-    }
-
-    /// <summary>
-    /// Tries to parse a Base58-encoded UTF-8 span into a <see cref="Hash32"/>.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool TryParseBase58(ReadOnlySpan<byte> utf8, out Hash32 result)
-    {
-        result = Zero;
-
-        // Max Base58 length for 32 bytes is 44
-        Span<byte> buffer = stackalloc byte[ByteLength + 1]; // +1 for carry safety
-        buffer.Clear();
-
-        int length = 0;
-
-        for (int i = 0; i < utf8.Length; i++)
-        {
-            int carry = Base58Alphabet.IndexOf(utf8[i]);
-            if (carry < 0)
-                return false;
-
-            int j = 0;
-            for (int k = ByteLength; k >= 0; k--)
-            {
-                int value = buffer[k] * 58 + carry;
-                buffer[k] = (byte)value;
-                carry = value >> 8;
-                if (buffer[k] != 0 && j == 0)
-                    j = k;
-            }
-
-            if (carry != 0)
-                return false;
-
-            length = ByteLength + 1 - j;
-        }
-
-        // Strip leading zero used for carry
-        ReadOnlySpan<byte> decoded =
-            length == ByteLength + 1 ? buffer.Slice(1) : buffer.Slice(ByteLength + 1 - length);
-
-        if (decoded.Length != ByteLength)
-            return false;
-
-        result = new Hash32(decoded);
-        return true;
-    }
-
-    /// <summary>
-    /// Tries to parse a Base64-encoded UTF-8 span into a <see cref="Hash32"/>.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool TryParseBase64(ReadOnlySpan<byte> utf8, out Hash32 result)
-    {
-        result = Zero;
-
-        Span<byte> decoded = stackalloc byte[ByteLength];
-
-        if (!System.Convert.TryFromBase64Chars(
-                MemoryMarshal.Cast<byte, char>(utf8),
-                decoded,
-                out int bytesWritten))
-            return false;
-
-        if (bytesWritten != ByteLength)
-            return false;
-
-        result = new Hash32(decoded);
-        return true;
-    }
-
-    /// <summary>
-    /// Tries to parse a hexadecimal string without exceptions.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool TryParse(ReadOnlySpan<char> hex, out Hash32 result)
-    {
-        result = Zero;
-
-        if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-            hex = hex.Slice(2);
-
-        if (hex.Length != HexLength)
-            return false;
-
-        if (!ByteUtils.TryParseHexUInt64(hex.Slice(0, 16), out ulong u0))
-            return false;
-        if (!ByteUtils.TryParseHexUInt64(hex.Slice(16, 16), out ulong u1))
-            return false;
-        if (!ByteUtils.TryParseHexUInt64(hex.Slice(32, 16), out ulong u2))
-            return false;
-        if (!ByteUtils.TryParseHexUInt64(hex.Slice(48, 16), out ulong u3))
-            return false;
-
-        result = new Hash32(u0, u1, u2, u3);
-        return true;
-    }
-
-    #region Hex Parsing Helpers
-
-    /// <summary>
-    /// Parses a hexadecimal UTF-8 byte span (no 0x prefix).
-    /// Accepts odd-length hex (EVM minimal encoding).
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static uint256 ParseHexUtf8(ReadOnlySpan<byte> hex)
-    {
-        if (hex.Length == 0)
-            return uint256.Zero;
-
-        if (hex.Length > 64)
-            throw new FormatException("Hex value exceeds 256 bits");
-
-        ulong u0 = 0, u1 = 0, u2 = 0, u3 = 0;
-        int nibbleIndex = 0;
-
-        // Process from right to left (least significant nibble first)
-        for (int i = hex.Length - 1; i >= 0; i--)
-        {
-            byte c = hex[i];
-            int v =
-                (uint)(c - '0') <= 9 ? c - '0' :
-                (uint)((c | 0x20) - 'a') <= 5 ? (c | 0x20) - 'a' + 10 :
-                throw new FormatException("Invalid hex character");
-
-            int shift = (nibbleIndex & 15) << 2;
-
-            ref ulong limb = ref Unsafe.Add(ref u0, nibbleIndex >> 4);
-            limb |= (ulong)v << shift;
-
-            nibbleIndex++;
-        }
-
-        if (nibbleIndex > 64)
-            throw new FormatException("Hex value exceeds 256 bits");
-
-        return new uint256(u0, u1, u2, u3);
-    }
-
-    /// <summary>
-    /// Parses a decimal UTF-8 byte span.
-    /// Uses BigInteger only for decimal path.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static uint256 ParseDecimalUtf8(ReadOnlySpan<byte> dec)
-    {
-        BigInteger value = BigInteger.Zero;
-
-        for (int i = 0; i < dec.Length; i++)
-        {
-            byte c = dec[i];
-            if ((uint)(c - '0') > 9)
-                throw new FormatException("Invalid decimal character");
-
-            value = value * 10 + (c - '0');
-            if (value.GetByteCount(isUnsigned: true) > 32)
-                throw new OverflowException("Decimal value exceeds 256 bits");
-        }
-
-        return (uint256)value;
-    }
-
-    #endregion
-
-    public static bool TryParse(string? hex, out Hash32 result)
-    {
-        if (string.IsNullOrEmpty(hex))
-        {
-            result = Zero;
-            return false;
-        }
-        return TryParse(hex.AsSpan(), out result);
-    }
-
-    public static bool TryParse(ReadOnlySpan<char> s, IFormatProvider? provider, out Hash32 result)
-        => TryParse(s, out result);
-
-    public static bool TryParse([NotNullWhen(true)] string? s, IFormatProvider? provider, out Hash32 result)
-        => TryParse(s, out result);
-
-    #endregion
-
-    #region Formatting
-
-    // Lookup table for hex encoding (lowercase)
-    private static ReadOnlySpan<byte> HexBytesLower => "0123456789abcdef"u8;
-    private static ReadOnlySpan<byte> HexBytesUpper => "0123456789ABCDEF"u8;
-
-    /// <summary>
-    /// Returns the hexadecimal representation with 0x prefix (lowercase).
-    /// </summary>
-    public override string ToString()
-    {
-        return string.Create(66, this, static (chars, hash) =>
-        {
-            chars[0] = '0';
-            chars[1] = 'x';
-            hash.FormatHexCore(chars.Slice(2), uppercase: false);
-        });
-    }
-
-    /// <summary>
-    /// Formats the value according to the format string.
-    /// "x" for lowercase hex, "X" for uppercase hex, "0x" for lowercase with prefix (default), "0X" for uppercase with prefix.
-    /// </summary>
-    public string ToString(string? format, IFormatProvider? formatProvider = null)
-    {
-        format ??= "0x";
-
-        return format switch
-        {
-            "0x" => ToString(),
-            "0X" => string.Create(66, this, static (chars, hash) =>
-            {
-                chars[0] = '0';
-                chars[1] = 'x';
-                hash.FormatHexCore(chars.Slice(2), uppercase: true);
-            }),
-            "x" => string.Create(64, this, static (chars, hash) =>
-            {
-                hash.FormatHexCore(chars, uppercase: false);
-            }),
-            "X" => string.Create(64, this, static (chars, hash) =>
-            {
-                hash.FormatHexCore(chars, uppercase: true);
-            }),
-            _ => throw new FormatException($"Unknown format: {format}")
-        };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void FormatHexCore(Span<char> destination, bool uppercase)
-    {
-        FormatUInt64Hex(_u0, destination, uppercase);
-        FormatUInt64Hex(_u1, destination.Slice(16), uppercase);
-        FormatUInt64Hex(_u2, destination.Slice(32), uppercase);
-        FormatUInt64Hex(_u3, destination.Slice(48), uppercase);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void FormatUInt64Hex(ulong value, Span<char> destination, bool uppercase)
-    {
-        // Format 16 hex characters from a ulong
-        for (int i = 15; i >= 0; i--)
-        {
-            int nibble = (int)(value & 0xF);
-            destination[i] = (char)(uppercase ? HexBytesUpper[nibble] : HexBytesLower[nibble]);
-            value >>= 4;
-        }
-    }
-
-    /// <summary>
-    /// Tries to format the value into the destination span.
-    /// Zero-allocation formatting.
-    /// </summary>
-    public bool TryFormat(Span<char> destination, out int charsWritten, ReadOnlySpan<char> format = default, IFormatProvider? provider = null)
-    {
-        bool hasPrefix = format.Length == 0 || format.SequenceEqual("0x") || format.SequenceEqual("0X");
-        bool uppercase = format.SequenceEqual("X") || format.SequenceEqual("0X");
-        int requiredLength = hasPrefix ? 66 : 64;
-
-        if (destination.Length < requiredLength)
-        {
-            charsWritten = 0;
-            return false;
-        }
-
-        if (hasPrefix)
-        {
-            destination[0] = '0';
-            destination[1] = 'x';
-            FormatHexCore(destination.Slice(2), uppercase);
-        }
-        else
-        {
-            FormatHexCore(destination, uppercase);
-        }
-
-        charsWritten = requiredLength;
-        return true;
-    }
-
-    /// <summary>
-    /// Tries to format the value into a UTF-8 destination span.
-    /// Zero-allocation formatting for JSON serialization.
-    /// </summary>
-    public bool TryFormat(Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format = default, IFormatProvider? provider = null)
-    {
-        bool hasPrefix = format.Length == 0 || format.SequenceEqual("0x") || format.SequenceEqual("0X");
-        bool uppercase = format.SequenceEqual("X") || format.SequenceEqual("0X");
-        int requiredLength = hasPrefix ? 66 : 64;
-
-        if (utf8Destination.Length < requiredLength)
-        {
-            bytesWritten = 0;
-            return false;
-        }
-
-        if (hasPrefix)
-        {
-            utf8Destination[0] = (byte)'0';
-            utf8Destination[1] = (byte)'x';
-            FormatHexCoreUtf8(utf8Destination.Slice(2), uppercase);
-        }
-        else
-        {
-            FormatHexCoreUtf8(utf8Destination, uppercase);
-        }
-
-        bytesWritten = requiredLength;
-        return true;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void FormatHexCoreUtf8(Span<byte> destination, bool uppercase)
-    {
-        FormatUInt64HexUtf8(_u0, destination, uppercase);
-        FormatUInt64HexUtf8(_u1, destination.Slice(16), uppercase);
-        FormatUInt64HexUtf8(_u2, destination.Slice(32), uppercase);
-        FormatUInt64HexUtf8(_u3, destination.Slice(48), uppercase);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void FormatUInt64HexUtf8(ulong value, Span<byte> destination, bool uppercase)
-    {
-        var hexTable = uppercase ? HexBytesUpper : HexBytesLower;
-        for (int i = 15; i >= 0; i--)
-        {
-            destination[i] = hexTable[(int)(value & 0xF)];
-            value >>= 4;
-        }
-    }
 
     #endregion
 
     #region Properties
 
     /// <summary>
-    /// Returns true if this is the zero hash.
-    /// Branchless implementation for better CPU pipeline efficiency.
+    /// Returns true if all 32 bytes are zero.
+    /// Uses a branchless OR reduction for predictable performance.
     /// </summary>
     public bool IsZero
     {
@@ -691,30 +232,536 @@ public readonly struct Hash32 :
 
     #endregion
 
+    #region Parsing
+
+    /// <summary>
+    /// Parses a hex string (64 hex chars) with an optional 0x/0X prefix.
+    /// Throws <see cref="FormatException"/> if the input is invalid.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Hash32 Parse(ReadOnlySpan<char> hex)
+    {
+        hex = ByteUtils.TrimWhitespace(hex);
+        if (ByteUtils.TryTrimHexPrefix(hex, out ReadOnlySpan<char> trimmed))
+            hex = trimmed;
+
+        if (hex.Length != HexLength)
+            ThrowHelper.ThrowFormatExceptionInvalidHexLength();
+
+        if (!ByteUtils.TryParseHexUInt64CharsFixed16(hex.Slice(0, 16), out ulong u0))
+            ThrowHelper.ThrowFormatExceptionInvalidHex();
+        if (!ByteUtils.TryParseHexUInt64CharsFixed16(hex.Slice(16, 16), out ulong u1))
+            ThrowHelper.ThrowFormatExceptionInvalidHex();
+        if (!ByteUtils.TryParseHexUInt64CharsFixed16(hex.Slice(32, 16), out ulong u2))
+            ThrowHelper.ThrowFormatExceptionInvalidHex();
+        if (!ByteUtils.TryParseHexUInt64CharsFixed16(hex.Slice(48, 16), out ulong u3))
+            ThrowHelper.ThrowFormatExceptionInvalidHex();
+
+        return new Hash32(u0, u1, u2, u3);
+    }
+
+    /// <summary>
+    /// Parses a UTF-8 hex string (64 hex bytes) with an optional 0x/0X prefix.
+    /// Throws <see cref="FormatException"/> if the input is invalid.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Hash32 Parse(ReadOnlySpan<byte> utf8)
+    {
+        if (TryParseHexUtf8(utf8, out var value))
+            return value;
+
+        ThrowHelper.ThrowFormatExceptionInvalidHex();
+        return default;
+    }
+
+    /// <summary>
+    /// Parses a Base58-encoded UTF-8 payload into a <see cref="Hash32"/>.
+    /// This is the canonical Solana textual encoding for 32-byte values.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Hash32 ParseBase58(ReadOnlySpan<byte> utf8)
+    {
+        if (TryParseBase58(utf8, out var value))
+            return value;
+
+        ThrowHelper.ThrowFormatExceptionInvalidBase58();
+        return default;
+    }
+
+    /// <summary>
+    /// Parses a Base64-encoded UTF-8 payload into a <see cref="Hash32"/>.
+    /// Standard and URL-safe Base64 are supported. The decoded payload MUST be exactly 32 bytes.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Hash32 ParseBase64(ReadOnlySpan<byte> utf8)
+    {
+        if (TryParseBase64(utf8, out var value))
+            return value;
+
+        ThrowHelper.ThrowFormatExceptionInvalidBase64();
+        return default;
+    }
+
+    /// <summary>
+    /// Parses a string containing a hex hash (with or without 0x prefix).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Hash32 Parse(string hex) => Parse(hex.AsSpan(), CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Tries to parse a hex string (64 hex chars) with optional 0x prefix.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParse(ReadOnlySpan<char> s, out Hash32 result)
+    {
+        result = Zero;
+
+        s = ByteUtils.TrimWhitespace(s);
+        if (ByteUtils.TryTrimHexPrefix(s, out ReadOnlySpan<char> trimmed))
+            s = trimmed;
+
+        if (s.Length != HexLength)
+            return false;
+
+        if (!ByteUtils.TryParseHexUInt64CharsFixed16(s.Slice(0, 16), out ulong u0)) return false;
+        if (!ByteUtils.TryParseHexUInt64CharsFixed16(s.Slice(16, 16), out ulong u1)) return false;
+        if (!ByteUtils.TryParseHexUInt64CharsFixed16(s.Slice(32, 16), out ulong u2)) return false;
+        if (!ByteUtils.TryParseHexUInt64CharsFixed16(s.Slice(48, 16), out ulong u3)) return false;
+
+        result = new Hash32(u0, u1, u2, u3);
+        return true;
+    }
+
+    /// <summary>
+    /// Tries to parse a nullable string containing a hex hash (with or without 0x prefix).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParse(string? s, out Hash32 result)
+    {
+        if (string.IsNullOrEmpty(s))
+        {
+            result = Zero;
+            return false;
+        }
+        return TryParse(s.AsSpan(), out result);
+    }
+
+    /// <summary>
+    /// Tries to parse a UTF-8 payload that is explicitly hex (optional 0x prefix) into a hash.
+    /// Accepts exactly 64 hex bytes after trimming the prefix.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParseHexUtf8(ReadOnlySpan<byte> utf8, out Hash32 result)
+    {
+        result = Zero;
+
+        utf8 = ByteUtils.TrimAsciiWhitespaceUtf8(utf8);
+        if (utf8.IsEmpty) return false;
+
+        // Optional 0x/0X prefix.
+        if (ByteUtils.TryTrimHexPrefixUtf8(utf8, out ReadOnlySpan<byte> hexDigits))
+            utf8 = hexDigits;
+
+        if (utf8.Length != HexLength)
+            return false;
+
+        if (!ByteUtils.TryParseHexUInt64Utf8Fixed16(utf8.Slice(0, 16), out ulong u0)) return false;
+        if (!ByteUtils.TryParseHexUInt64Utf8Fixed16(utf8.Slice(16, 16), out ulong u1)) return false;
+        if (!ByteUtils.TryParseHexUInt64Utf8Fixed16(utf8.Slice(32, 16), out ulong u2)) return false;
+        if (!ByteUtils.TryParseHexUInt64Utf8Fixed16(utf8.Slice(48, 16), out ulong u3)) return false;
+
+        result = new Hash32(u0, u1, u2, u3);
+        return true;
+    }
+
+    /// <summary>
+    /// Tries to parse a Base58-encoded UTF-8 payload into a hash.
+    /// The decoded bytes MUST be exactly 32 bytes.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParseBase58(ReadOnlySpan<byte> utf8, out Hash32 result)
+    {
+        result = Zero;
+
+        utf8 = ByteUtils.TrimAsciiWhitespaceUtf8(utf8);
+        if (utf8.IsEmpty) return false;
+
+        Span<byte> decoded32 = stackalloc byte[ByteLength];
+        if (!ByteUtils.TryDecodeBase58To32(utf8, decoded32))
+            return false;
+
+        result = new Hash32(decoded32);
+        return true;
+    }
+
+    /// <summary>
+    /// Tries to parse a Base64-encoded UTF-8 payload (standard or URL-safe) into a hash.
+    /// The decoded bytes MUST be exactly 32 bytes.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParseBase64(ReadOnlySpan<byte> utf8, out Hash32 result)
+    {
+        result = Zero;
+
+        utf8 = ByteUtils.TrimAsciiWhitespaceUtf8(utf8);
+        if (utf8.IsEmpty) return false;
+
+        Span<byte> decoded32 = stackalloc byte[ByteLength];
+        if (!ByteUtils.TryDecodeBase64Utf8(utf8, decoded32, out int bytesWritten))
+            return false;
+
+        if (bytesWritten != ByteLength)
+            return false;
+
+        result = new Hash32(decoded32);
+        return true;
+    }
+
+    /// <summary>
+    /// Tries to parse an "unknown source" UTF-8 hash string safely:
+    /// - If it begins with 0x/0X: hex only.
+    /// - Else if it is 64 hex chars: hex.
+    /// - Else: Base58 (Solana canonical).
+    /// - Else: Base64 (optional fallback).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParseAuto(ReadOnlySpan<byte> utf8, out Hash32 result)
+    {
+        result = Zero;
+
+        utf8 = ByteUtils.TrimAsciiWhitespaceUtf8(utf8);
+        if (utf8.IsEmpty) return false;
+
+        // Explicit EVM-style prefix => hex only.
+        if (utf8.Length >= 2 && utf8[0] == (byte)'0' && ((utf8[1] | 0x20) == (byte)'x'))
+            return TryParseHexUtf8(utf8, out result);
+
+        // Heuristic: 64 ASCII chars and all hex => treat as hex.
+        if (utf8.Length == HexLength && ByteUtils.IsAllHexUtf8(utf8))
+            return TryParseHexUtf8(utf8, out result);
+
+        // Canonical Solana: base58.
+        if (TryParseBase58(utf8, out result))
+            return true;
+
+        // Optional fallback: base64.
+        return TryParseBase64(utf8, out result);
+    }
+
+    /// <inheritdoc />
+    public static Hash32 Parse(ReadOnlySpan<char> s, IFormatProvider? provider)
+    {
+        // Fix: avoid infinite recursion in Parse(ReadOnlySpan<char>, IFormatProvider?) by calling the char-only Parse overload.
+        return Parse(s);
+    }
+
+    /// <inheritdoc />
+    public static bool TryParse(ReadOnlySpan<char> s, IFormatProvider? provider, out Hash32 result)
+    {
+        _ = provider; // Hash32 parsing is invariant.
+        return TryParse(s, out result);
+    }
+
+    /// <inheritdoc />
+    public static Hash32 Parse([NotNullWhen(true)] string? s, IFormatProvider? provider)
+    {
+        _ = provider;
+        ArgumentNullException.ThrowIfNull(s);
+        return Parse(s.AsSpan(), CultureInfo.InvariantCulture);
+    }
+
+    /// <inheritdoc />
+    public static bool TryParse([NotNullWhen(true)] string? s, IFormatProvider? provider, out Hash32 result)
+    {
+        _ = provider;
+        return TryParse(s, out result);
+    }
+
+    #endregion
+
+    #region Formatting
+
+    /// <summary>Hex encoding table (lowercase).</summary>
+    private static ReadOnlySpan<byte> HexLower => "0123456789abcdef"u8;
+
+    /// <summary>Hex encoding table (uppercase).</summary>
+    private static ReadOnlySpan<byte> HexUpper => "0123456789ABCDEF"u8;
+
+    /// <summary>
+    /// Returns the default string representation: lowercase hex with 0x prefix.
+    /// </summary>
+    public override string ToString()
+        => string.Create(66, this, static (chars, value) =>
+        {
+            chars[0] = '0';
+            chars[1] = 'x';
+            value.FormatHexChars(chars.Slice(2), uppercase: false);
+        });
+
+    /// <summary>
+    /// Formats the hash using:
+    /// - "0x" (default): lowercase with prefix
+    /// - "0X": uppercase with prefix
+    /// - "x": lowercase without prefix
+    /// - "X": uppercase without prefix
+    /// </summary>
+    public string ToString(string? format, IFormatProvider? formatProvider = null)
+    {
+        _ = formatProvider;
+
+        ParseFormat(format, out bool includePrefix, out bool uppercase);
+
+        int charCount = includePrefix ? 66 : 64;
+        return string.Create(charCount, (this, includePrefix, uppercase), static (chars, state) =>
+        {
+            int offset = 0;
+            if (state.includePrefix)
+            {
+                chars[0] = '0';
+                chars[1] = 'x';
+                offset = 2;
+            }
+
+            state.Item1.FormatHexChars(chars.Slice(offset), state.uppercase);
+        });
+    }
+
+    /// <inheritdoc />
+    public bool TryFormat(Span<char> destination, out int charsWritten, ReadOnlySpan<char> format = default, IFormatProvider? provider = null)
+    {
+        _ = provider;
+
+        ParseFormat(format.IsEmpty ? null : format.ToString(), out bool includePrefix, out bool uppercase);
+
+        int required = includePrefix ? 66 : 64;
+        if (destination.Length < required)
+        {
+            charsWritten = 0;
+            return false;
+        }
+
+        int offset = 0;
+        if (includePrefix)
+        {
+            destination[0] = '0';
+            destination[1] = 'x';
+            offset = 2;
+        }
+
+        FormatHexChars(destination.Slice(offset), uppercase);
+        charsWritten = required;
+        return true;
+    }
+
+    /// <inheritdoc />
+    public bool TryFormat(Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format = default, IFormatProvider? provider = null)
+    {
+        _ = provider;
+
+        ParseFormat(format.IsEmpty ? null : format.ToString(), out bool includePrefix, out bool uppercase);
+
+        int required = includePrefix ? 66 : 64;
+        if (utf8Destination.Length < required)
+        {
+            bytesWritten = 0;
+            return false;
+        }
+
+        int offset = 0;
+        if (includePrefix)
+        {
+            utf8Destination[0] = (byte)'0';
+            utf8Destination[1] = (byte)'x';
+            offset = 2;
+        }
+
+        FormatHexUtf8(utf8Destination.Slice(offset), uppercase);
+        bytesWritten = required;
+        return true;
+    }
+
+    /// <summary>
+    /// Formats the hash as 64 hex characters into a destination char span.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void FormatHexChars(Span<char> destination64, bool uppercase)
+    {
+        ByteUtils.WriteHexUInt64(destination64.Slice(0, 16), _u0, uppercase);
+        ByteUtils.WriteHexUInt64(destination64.Slice(16, 16), _u1, uppercase);
+        ByteUtils.WriteHexUInt64(destination64.Slice(32, 16), _u2, uppercase);
+        ByteUtils.WriteHexUInt64(destination64.Slice(48, 16), _u3, uppercase);
+    }
+
+    /// <summary>
+    /// Formats the hash as 64 hex bytes into a destination UTF-8 span.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void FormatHexUtf8(Span<byte> destination64, bool uppercase)
+    {
+        ReadOnlySpan<byte> table = uppercase ? HexUpper : HexLower;
+
+        ByteUtils.WriteHexUInt64Utf8(destination64.Slice(0, 16), _u0, table);
+        ByteUtils.WriteHexUInt64Utf8(destination64.Slice(16, 16), _u1, table);
+        ByteUtils.WriteHexUInt64Utf8(destination64.Slice(32, 16), _u2, table);
+        ByteUtils.WriteHexUInt64Utf8(destination64.Slice(48, 16), _u3, table);
+    }
+
+    /// <summary>
+    /// Parses the format string into prefix/uppercase flags using minimal branching and no span comparisons.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void ParseFormat(string? format, out bool includePrefix, out bool uppercase)
+    {
+        // Default: "0x" lowercase.
+        if (string.IsNullOrEmpty(format))
+        {
+            includePrefix = true;
+            uppercase = false;
+            return;
+        }
+
+        if (format.Length == 1)
+        {
+            char f0 = format[0];
+            if (f0 == 'x')
+            {
+                includePrefix = false;
+                uppercase = false;
+                return;
+            }
+            if (f0 == 'X')
+            {
+                includePrefix = false;
+                uppercase = true;
+                return;
+            }
+        }
+        else if (format.Length == 2)
+        {
+            if (format[0] == '0')
+            {
+                char f1 = format[1];
+                if (f1 == 'x')
+                {
+                    includePrefix = true;
+                    uppercase = false;
+                    return;
+                }
+                if (f1 == 'X')
+                {
+                    includePrefix = true;
+                    uppercase = true;
+                    return;
+                }
+            }
+        }
+
+        throw new FormatException(nameof(format));
+    }
+
+    #endregion
+
+    #region Bulk SIMD (rule-pack scanning)
+
+    /// <summary>
+    /// Searches a contiguous span for the first occurrence of <paramref name="needle"/>.
+    /// Uses SIMD when available; falls back to scalar comparisons otherwise.
+    /// </summary>
+    /// <param name="haystack">The span to search.</param>
+    /// <param name="needle">The value to locate.</param>
+    /// <returns>The index of the first match, or -1 if not found.</returns>
+    public static int IndexOf(ReadOnlySpan<Hash32> haystack, Hash32 needle)
+    {
+        if (haystack.IsEmpty) return -1;
+
+        // SIMD pays off when scanning many items; we still keep a safe fallback.
+        if (Vector256.IsHardwareAccelerated && haystack.Length >= 8)
+        {
+            ReadOnlySpan<byte> hayBytes = MemoryMarshal.AsBytes(haystack);
+            ReadOnlySpan<byte> needleBytes = ByteUtils.AsReadOnlyBytes(in needle);
+
+            Vector256<byte> needleVec = ByteUtils.ReadVector256(needleBytes);
+
+            int count = haystack.Length;
+            int offset = 0;
+            for (int i = 0; i < count; i++, offset += ByteLength)
+            {
+                Vector256<byte> itemVec = ByteUtils.ReadVector256(hayBytes.Slice(offset, ByteLength));
+                if (Vector256.EqualsAll(itemVec, needleVec))
+                    return i;
+            }
+
+            return -1;
+        }
+
+        for (int i = 0; i < haystack.Length; i++)
+        {
+            if (haystack[i].Equals(needle))
+                return i;
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// Counts how many elements in <paramref name="haystack"/> equal <paramref name="needle"/>.
+    /// Uses SIMD when available; falls back to scalar comparisons otherwise.
+    /// </summary>
+    public static int CountEquals(ReadOnlySpan<Hash32> haystack, Hash32 needle)
+    {
+        if (haystack.IsEmpty) return 0;
+
+        int countMatches = 0;
+
+        if (Vector256.IsHardwareAccelerated && haystack.Length >= 8)
+        {
+            ReadOnlySpan<byte> hayBytes = MemoryMarshal.AsBytes(haystack);
+            ReadOnlySpan<byte> needleBytes = ByteUtils.AsReadOnlyBytes(in needle);
+
+            Vector256<byte> needleVec = ByteUtils.ReadVector256(needleBytes);
+
+            int count = haystack.Length;
+            int offset = 0;
+            for (int i = 0; i < count; i++, offset += ByteLength)
+            {
+                Vector256<byte> itemVec = ByteUtils.ReadVector256(hayBytes.Slice(offset, ByteLength));
+                if (Vector256.EqualsAll(itemVec, needleVec))
+                    countMatches++;
+            }
+
+            return countMatches;
+        }
+
+        for (int i = 0; i < haystack.Length; i++)
+        {
+            if (haystack[i].Equals(needle))
+                countMatches++;
+        }
+
+        return countMatches;
+    }
+
+    #endregion
+
     #region Conversions
 
     /// <summary>
-    /// Explicit conversion from byte array.
+    /// Explicit conversion from a 32-byte big-endian array.
     /// </summary>
     public static explicit operator Hash32(byte[] bytes) => new(bytes);
 
     /// <summary>
-    /// Converts to uint256 for numeric operations if needed.
-    /// Zero-allocation direct conversion.
+    /// Converts this hash to a <c>uint256</c> for numeric-style operations if required.
+    /// This is a cold-path convenience API; the hash is not inherently numeric.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public uint256 ToUInt256() => new(_u3, _u2, _u1, _u0);
 
     /// <summary>
-    /// Creates a Hash32 from a uint256.
-    /// Zero-allocation direct conversion.
+    /// Creates a hash from a <c>uint256</c> by serialising it as big-endian bytes and re-reading.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Hash32 FromUInt256(uint256 value)
     {
-        // uint256 stores as little-endian internally: _u0 is LSB, _u3 is MSB
-        // Hash32 stores as big-endian: _u0 is MSB
-        // Direct field access via WriteBigEndian then read back
         Span<byte> bytes = stackalloc byte[ByteLength];
         value.WriteBigEndian(bytes);
         return new Hash32(bytes);
